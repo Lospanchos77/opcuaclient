@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>OpcUaTrayClient.WinForms</RootNamespace>
+    <AssemblyName>OpcUaTrayClient</AssemblyName>
+
+    <!-- Version -->
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Product>I.F OPC-UA CLIENT</Product>
+    <Company>I.F</Company>
+    <Copyright>Copyright (c) 2025 I.F</Copyright>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpcUaTrayClient.Core\OpcUaTrayClient.Core.csproj" />
+    <ProjectReference Include="..\OpcUaTrayClient.OpcUa\OpcUaTrayClient.OpcUa.csproj" />
+    <ProjectReference Include="..\OpcUaTrayClient.Persistence\OpcUaTrayClient.Persistence.csproj" />
+  </ItemGroup>
+
+</Project>

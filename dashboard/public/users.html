@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Utilisateurs | OPC UA Dashboard</title>
+
+  <!-- Google Font -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Source+Sans+Pro:300,400,400i,700&display=fallback">
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+  <!-- AdminLTE -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/admin-lte@3.2/dist/css/adminlte.min.css">
+  <!-- Custom -->
+  <link rel="stylesheet" href="css/custom.css">
+</head>
+<body class="hold-transition sidebar-mini">
+<div class="wrapper">
+
+  <!-- Navbar -->
+  <nav class="main-header navbar navbar-expand navbar-dark navbar-primary">
+    <ul class="navbar-nav">
+      <li class="nav-item">
+        <a class="nav-link" data-widget="pushmenu" href="#"><i class="fas fa-bars"></i></a>
+      </li>
+    </ul>
+    <ul class="navbar-nav ml-auto">
+      <li class="nav-item dropdown">
+        <a class="nav-link dropdown-toggle" href="#" data-toggle="dropdown">
+          <i class="fas fa-user"></i> <span id="userName">User</span>
+        </a>
+        <div class="dropdown-menu dropdown-menu-right">
+          <a class="dropdown-item" href="#" onclick="logout()"><i class="fas fa-sign-out-alt mr-2"></i> Deconnexion</a>
+        </div>
+      </li>
+    </ul>
+  </nav>
+
+  <!-- Sidebar -->
+  <aside class="main-sidebar sidebar-dark-primary elevation-4">
+    <a href="dashboard.html" class="brand-link">
+      <span class="brand-text font-weight-light ml-3"><i class="fas fa-industry mr-2"></i>OPC UA</span>
+    </a>
+    <div class="sidebar">
+      <nav class="mt-2">
+        <ul class="nav nav-pills nav-sidebar flex-column">
+          <li class="nav-item">
+            <a href="dashboard.html" class="nav-link">
+              <i class="nav-icon fas fa-tachometer-alt"></i>
+              <p>Dashboard</p>
+            </a>
+          </li>
+          <li class="nav-item">
+            <a href="charts.html" class="nav-link">
+              <i class="nav-icon fas fa-chart-line"></i>
+              <p>Graphiques</p>
+            </a>
+          </li>
+          <li class="nav-item" id="usersMenuItem">
+            <a href="users.html" class="nav-link active">
+              <i class="nav-icon fas fa-users"></i>
+              <p>Utilisateurs</p>
+            </a>
+          </li>
+        </ul>
+      </nav>
+    </div>
+  </aside>
+
+  <!-- Content -->
+  <div class="content-wrapper">
+    <div class="content-header">
+      <div class="container-fluid">
+        <div class="row mb-2">
+          <div class="col-sm-6">
+            <h1 class="m-0">Gestion des Utilisateurs</h1>
+          </div>
+          <div class="col-sm-6 text-right">
+            <button class="btn btn-primary" onclick="showCreateModal()">
+              <i class="fas fa-plus mr-1"></i> Nouvel utilisateur
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <section class="content">
+      <div class="container-fluid">
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title"><i class="fas fa-users mr-2"></i>Liste des utilisateurs</h3>
+          </div>
+          <div class="card-body table-responsive p-0">
+            <table class="table table-hover text-nowrap">
+              <thead>
+                <tr>
+                  <th>Utilisateur</th>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Derniere connexion</th>
+                  <th>Date creation</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="usersTable">
+                <tr>
+                  <td colspan="6" class="text-center py-4">
+                    <i class="fas fa-spinner fa-spin"></i> Chargement...
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <footer class="main-footer">
+    <strong>OPC UA Dashboard</strong>
+  </footer>
+</div>
+
+<!-- Create/Edit Modal -->
+<div class="modal fade" id="userModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="modalTitle">Nouvel utilisateur</h5>
+        <button type="button" class="close" data-dismiss="modal">
+          <span>&times;</span>
+        </button>
+      </div>
+      <form id="userForm" onsubmit="saveUser(event)">
+        <div class="modal-body">
+          <input type="hidden" id="userId">
+          <div class="form-group">
+            <label for="username">Nom d'utilisateur *</label>
+            <input type="text" class="form-control" id="username" required>
+          </div>
+          <div class="form-group">
+            <label for="email">Email</label>
+            <input type="email" class="form-control" id="email">
+          </div>
+          <div class="form-group">
+            <label for="password">Mot de passe <span id="passwordHint">*</span></label>
+            <input type="password" class="form-control" id="password">
+            <small class="text-muted" id="passwordHelp" style="display: none;">Laissez vide pour conserver le mot de passe actuel</small>
+          </div>
+          <div class="form-group">
+            <label for="role">Role *</label>
+            <select class="form-control" id="role" required>
+              <option value="user">Utilisateur</option>
+              <option value="admin">Administrateur</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-dismiss="modal">Annuler</button>
+          <button type="submit" class="btn btn-primary">Enregistrer</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Delete Confirm Modal -->
+<div class="modal fade" id="deleteModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Confirmer la suppression</h5>
+        <button type="button" class="close" data-dismiss="modal">
+          <span>&times;</span>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p>Etes-vous sur de vouloir supprimer l'utilisateur <strong id="deleteUserName"></strong> ?</p>
+        <p class="text-danger">Cette action est irreversible.</p>
+      </div>
+      <div class="modal-footer">
+        <input type="hidden" id="deleteUserId">
+        <button type="button" class="btn btn-secondary" data-dismiss="modal">Annuler</button>
+        <button type="button" class="btn btn-danger" onclick="confirmDelete()">Supprimer</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Scripts -->
+<script src="https://cdn.jsdelivr.net/npm/jquery@3.6.0/dist/jquery.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/admin-lte@3.2/dist/js/adminlte.min.js"></script>
+<script src="js/app.js"></script>
+<script>
+// Initialize page
+document.addEventListener('DOMContentLoaded', () => {
+  if (!initPage()) return;
+
+  // Check admin access
+  const user = getCurrentUser();
+  if (user.role !== 'admin') {
+    window.location.href = 'dashboard.html';
+    return;
+  }
+
+  loadUsers();
+});
+
+// Load users list
+async function loadUsers() {
+  try {
+    const response = await api('/users');
+    if (!response) return;
+
+    const users = await response.json();
+    const tbody = document.getElementById('usersTable');
+
+    if (users.length === 0) {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="6" class="text-center py-4 text-muted">
+            Aucun utilisateur trouve
+          </td>
+        </tr>
+      `;
+      return;
+    }
+
+    tbody.innerHTML = users.map(user => `
+      <tr>
+        <td>
+          <i class="fas fa-user-circle mr-2 text-${user.role === 'admin' ? 'primary' : 'secondary'}"></i>
+          ${user.username}
+        </td>
+        <td>${user.email || '-'}</td>
+        <td>
+          <span class="badge badge-${user.role === 'admin' ? 'primary' : 'secondary'}">
+            ${user.role === 'admin' ? 'Admin' : 'User'}
+          </span>
+        </td>
+        <td>${user.lastLogin ? formatDate(user.lastLogin) : 'Jamais'}</td>
+        <td>${formatDate(user.createdAt)}</td>
+        <td>
+          <button class="btn btn-sm btn-outline-primary" onclick="editUser('${user._id}')">
+            <i class="fas fa-edit"></i>
+          </button>
+          <button class="btn btn-sm btn-outline-danger" onclick="showDeleteModal('${user._id}', '${user.username}')" ${user.username === 'admin' ? 'disabled' : ''}>
+            <i class="fas fa-trash"></i>
+          </button>
+        </td>
+      </tr>
+    `).join('');
+  } catch (error) {
+    console.error('Error loading users:', error);
+    showToast('Erreur lors du chargement des utilisateurs', 'danger');
+  }
+}
+
+// Show create modal
+function showCreateModal() {
+  document.getElementById('modalTitle').textContent = 'Nouvel utilisateur';
+  document.getElementById('userForm').reset();
+  document.getElementById('userId').value = '';
+  document.getElementById('passwordHint').textContent = '*';
+  document.getElementById('passwordHelp').style.display = 'none';
+  document.getElementById('password').required = true;
+  $('#userModal').modal('show');
+}
+
+// Edit user
+async function editUser(id) {
+  try {
+    const response = await api(`/users/${id}`);
+    if (!response) return;
+
+    const user = await response.json();
+
+    document.getElementById('modalTitle').textContent = 'Modifier l\'utilisateur';
+    document.getElementById('userId').value = user._id;
+    document.getElementById('username').value = user.username;
+    document.getElementById('email').value = user.email || '';
+    document.getElementById('password').value = '';
+    document.getElementById('role').value = user.role;
+    document.getElementById('passwordHint').textContent = '';
+    document.getElementById('passwordHelp').style.display = 'block';
+    document.getElementById('password').required = false;
+
+    $('#userModal').modal('show');
+  } catch (error) {
+    console.error('Error loading user:', error);
+    showToast('Erreur lors du chargement de l\'utilisateur', 'danger');
+  }
+}
+
+// Save user (create or update)
+async function saveUser(e) {
+  e.preventDefault();
+
+  const id = document.getElementById('userId').value;
+  const data = {
+    username: document.getElementById('username').value,
+    email: document.getElementById('email').value,
+    role: document.getElementById('role').value
+  };
+
+  const password = document.getElementById('password').value;
+  if (password) {
+    data.password = password;
+  }
+
+  try {
+    const url = id ? `/users/${id}` : '/users';
+    const method = id ? 'PUT' : 'POST';
+
+    const response = await api(url, {
+      method,
+      body: JSON.stringify(data)
+    });
+
+    if (!response) return;
+
+    if (response.ok) {
+      $('#userModal').modal('hide');
+      showToast(id ? 'Utilisateur modifie' : 'Utilisateur cree', 'success');
+      loadUsers();
+    } else {
+      const error = await response.json();
+      showToast(error.error || 'Erreur', 'danger');
+    }
+  } catch (error) {
+    console.error('Error saving user:', error);
+    showToast('Erreur lors de l\'enregistrement', 'danger');
+  }
+}
+
+// Show delete modal
+function showDeleteModal(id, username) {
+  document.getElementById('deleteUserId').value = id;
+  document.getElementById('deleteUserName').textContent = username;
+  $('#deleteModal').modal('show');
+}
+
+// Confirm delete
+async function confirmDelete() {
+  const id = document.getElementById('deleteUserId').value;
+
+  try {
+    const response = await api(`/users/${id}`, { method: 'DELETE' });
+
+    if (!response) return;
+
+    if (response.ok) {
+      $('#deleteModal').modal('hide');
+      showToast('Utilisateur supprime', 'success');
+      loadUsers();
+    } else {
+      const error = await response.json();
+      showToast(error.error || 'Erreur', 'danger');
+    }
+  } catch (error) {
+    console.error('Error deleting user:', error);
+    showToast('Erreur lors de la suppression', 'danger');
+  }
+}
+</script>
+</body>
+</html>

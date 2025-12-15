@@ -1,0 +1,241 @@
+/* Custom styles for OPC UA Dashboard */
+
+/* Login page */
+.login-page {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.login-box {
+  width: 400px;
+}
+
+.login-card-body {
+  border-radius: 10px;
+}
+
+/* Value cards on dashboard */
+.value-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  border: none;
+  border-radius: 10px;
+}
+
+.value-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+}
+
+.value-display {
+  font-size: 2rem;
+  font-weight: 700;
+  font-family: 'Segoe UI', monospace;
+}
+
+.value-display.quality-good {
+  color: #28a745;
+}
+
+.value-display.quality-bad {
+  color: #dc3545;
+}
+
+.value-display.quality-uncertain {
+  color: #ffc107;
+}
+
+.node-path {
+  font-size: 0.85rem;
+  color: #6c757d;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timestamp {
+  font-size: 0.75rem;
+  color: #adb5bd;
+  margin-top: 0.5rem;
+}
+
+/* Badges */
+.badge-success {
+  background-color: #28a745;
+}
+
+.badge-danger {
+  background-color: #dc3545;
+}
+
+.badge-warning {
+  background-color: #ffc107;
+  color: #212529;
+}
+
+/* Sidebar custom */
+.sidebar-dark-primary .nav-sidebar > .nav-item > .nav-link.active {
+  background-color: rgba(255,255,255,0.1);
+  border-left: 3px solid #007bff;
+}
+
+.brand-link {
+  border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+}
+
+/* Info boxes */
+.info-box {
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+}
+
+.info-box-icon {
+  border-radius: 10px 0 0 10px;
+}
+
+/* Cards */
+.card {
+  border-radius: 10px;
+  border: none;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+}
+
+.card-header {
+  background-color: transparent;
+  border-bottom: 1px solid rgba(0,0,0,0.08);
+}
+
+.card-primary.card-outline {
+  border-top: 3px solid #007bff;
+}
+
+/* Tables */
+.table thead th {
+  border-top: none;
+  background-color: #f8f9fa;
+  font-weight: 600;
+}
+
+/* Buttons */
+.btn {
+  border-radius: 5px;
+}
+
+.btn-group .btn {
+  border-radius: 0;
+}
+
+.btn-group .btn:first-child {
+  border-radius: 5px 0 0 5px;
+}
+
+.btn-group .btn:last-child {
+  border-radius: 0 5px 5px 0;
+}
+
+/* Select2 customization */
+.select2-container--bootstrap4 .select2-selection {
+  border-radius: 5px;
+}
+
+/* Chart container */
+#chartContainer {
+  min-height: 400px;
+}
+
+/* Stats row */
+#statsRow .info-box {
+  min-height: auto;
+  padding: 0.5rem;
+}
+
+#statsRow .info-box-icon {
+  width: 50px;
+  height: 50px;
+  font-size: 1.2rem;
+  line-height: 50px;
+}
+
+#statsRow .info-box-content {
+  padding: 5px 10px;
+}
+
+#statsRow .info-box-number {
+  font-size: 1.2rem;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .value-display {
+    font-size: 1.5rem;
+  }
+
+  .login-box {
+    width: 95%;
+    margin: 1rem;
+  }
+
+  .content-header h1 {
+    font-size: 1.5rem;
+  }
+}
+
+/* Animation for connection status */
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+
+.fa-circle.text-success {
+  animation: pulse 2s infinite;
+}
+
+/* Toast positioning */
+.alert.position-fixed {
+  animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* Dark mode preparation (for future) */
+.dark-mode .value-card {
+  background-color: #343a40;
+}
+
+.dark-mode .value-display.quality-good {
+  color: #5cb85c;
+}
+
+/* Loading spinner */
+.fa-spinner {
+  color: #007bff;
+}
+
+/* Empty state styling */
+.text-muted.fa-3x {
+  opacity: 0.5;
+}
+
+/* Blink animation for real-time indicator */
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0.3; }
+}
+
+.blink {
+  animation: blink 1s infinite;
+}
+
+/* Real-time badge */
+#autoRefreshIndicator {
+  font-size: 0.65rem;
+  vertical-align: middle;
+}
