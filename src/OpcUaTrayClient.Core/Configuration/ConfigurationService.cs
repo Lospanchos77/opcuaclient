@@ -133,9 +133,16 @@ public sealed class ConfigurationService : IDisposable
             }
 
             _current = config;
+
+            // V1.0.0 to V2.0.0 migration: Convert single endpoint to multi-server
+            if (await MigrateV1ToV2Async(ct))
+            {
+                _logger.LogInformation("Configuration migrated from V1.0.0 to V2.0.0 format");
+            }
+
             _logger.LogInformation("Configuration loaded from {Path}", _configFilePath);
-            _logger.LogDebug("Loaded config: Endpoint={Endpoint}, ForceJson={ForceJson}, DryRun={DryRun}",
-                _current.OpcUaEndpointUrl, _current.ForceJsonOnly, _current.DryRunMode);
+            _logger.LogDebug("Loaded config: Servers={ServerCount}, ForceJson={ForceJson}, DryRun={DryRun}",
+                _current.Servers.Count, _current.ForceJsonOnly, _current.DryRunMode);
         }
         catch (JsonException ex)
         {
@@ -181,6 +188,49 @@ public sealed class ConfigurationService : IDisposable
         }
     }
 
+    /// <summary>
+    /// Migrates V1.0.0 single-server configuration to V2.0.0 multi-server format.
+    /// Returns true if migration was performed.
+    /// </summary>
+    private async Task<bool> MigrateV1ToV2Async(CancellationToken ct)
+    {
+        // Check if migration is needed: V1 has OpcUaEndpointUrl set but no servers
+        if (string.IsNullOrWhiteSpace(_current.OpcUaEndpointUrl) || _current.Servers.Count > 0)
+        {
+            return false;
+        }
+
+        _logger.LogInformation("Migrating V1.0.0 configuration to V2.0.0 multi-server format");
+
+        // Create a server configuration from the legacy single-server settings
+        var migratedServer = new OpcUaServerConfiguration
+        {
+            Id = "default",
+            Name = "Serveur par défaut (migré)",
+            EndpointUrl = _current.OpcUaEndpointUrl,
+            Enabled = true,
+            SessionTimeoutMs = null,  // Use global defaults
+            KeepAliveIntervalMs = null,  // Use global defaults
+            Subscriptions = _current.Subscriptions.ToList()
+        };
+
+        _current.Servers.Add(migratedServer);
+
+        // Clear legacy fields to prevent re-migration
+        _current.OpcUaEndpointUrl = "";
+        _current.Subscriptions.Clear();
+
+        // Save the migrated configuration
+        await SaveInternalAsync(ct);
+
+        _logger.LogInformation(
+            "Migration complete: created server '{ServerName}' with {SubscriptionCount} subscriptions",
+            migratedServer.Name,
+            migratedServer.Subscriptions.Count);
+
+        return true;
+    }
+
     private async Task SaveInternalAsync(CancellationToken ct)
     {
         try
@@ -220,7 +270,8 @@ public sealed class ConfigurationService : IDisposable
     }
 
     /// <summary>
-    /// Adds a subscription to the configuration.
+    /// [DEPRECATED - V1.0.0] Adds a subscription to the legacy subscriptions list.
+    /// Use AddSubscriptionAsync(serverId, subscription) for V2.0.0.
     /// </summary>
     public async Task AddSubscriptionAsync(SubscriptionDefinition subscription, CancellationToken ct = default)
     {
@@ -235,7 +286,8 @@ public sealed class ConfigurationService : IDisposable
     }
 
     /// <summary>
-    /// Removes a subscription from the configuration.
+    /// [DEPRECATED - V1.0.0] Removes a subscription from the legacy subscriptions list.
+    /// Use RemoveSubscriptionAsync(serverId, nodeId) for V2.0.0.
     /// </summary>
     public async Task RemoveSubscriptionAsync(string nodeId, CancellationToken ct = default)
     {
@@ -245,6 +297,103 @@ public sealed class ConfigurationService : IDisposable
         }, ct);
 
         _logger.LogInformation("Subscription removed: {NodeId}", nodeId);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // V2.0.0: Multi-Server Configuration Methods
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// V2.0.0: Adds a server configuration.
+    /// </summary>
+    public async Task AddServerAsync(OpcUaServerConfiguration server, CancellationToken ct = default)
+    {
+        await UpdateAsync(config =>
+        {
+            // Generate ID if not provided
+            if (string.IsNullOrEmpty(server.Id))
+            {
+                server.Id = Guid.NewGuid().ToString("N")[..8];
+            }
+
+            // Remove existing server with same ID if present
+            config.Servers.RemoveAll(s => s.Id == server.Id);
+            config.Servers.Add(server);
+        }, ct);
+
+        _logger.LogInformation("Server added: {ServerName} ({ServerId})", server.Name, server.Id);
+    }
+
+    /// <summary>
+    /// V2.0.0: Removes a server configuration.
+    /// </summary>
+    public async Task RemoveServerAsync(string serverId, CancellationToken ct = default)
+    {
+        await UpdateAsync(config =>
+        {
+            config.Servers.RemoveAll(s => s.Id == serverId);
+        }, ct);
+
+        _logger.LogInformation("Server removed: {ServerId}", serverId);
+    }
+
+    /// <summary>
+    /// V2.0.0: Updates a server configuration.
+    /// </summary>
+    public async Task UpdateServerAsync(string serverId, Action<OpcUaServerConfiguration> updateAction, CancellationToken ct = default)
+    {
+        await UpdateAsync(config =>
+        {
+            var server = config.Servers.FirstOrDefault(s => s.Id == serverId);
+            if (server != null)
+            {
+                updateAction(server);
+            }
+        }, ct);
+
+        _logger.LogInformation("Server updated: {ServerId}", serverId);
+    }
+
+    /// <summary>
+    /// V2.0.0: Adds a subscription to a specific server.
+    /// </summary>
+    public async Task AddSubscriptionAsync(string serverId, SubscriptionDefinition subscription, CancellationToken ct = default)
+    {
+        await UpdateAsync(config =>
+        {
+            var server = config.Servers.FirstOrDefault(s => s.Id == serverId);
+            if (server != null)
+            {
+                // Remove existing subscription with same NodeId if present
+                server.Subscriptions.RemoveAll(s => s.NodeId == subscription.NodeId);
+                server.Subscriptions.Add(subscription);
+            }
+        }, ct);
+
+        _logger.LogInformation("Subscription added to server {ServerId}: {NodeId} ({DisplayName})",
+            serverId, subscription.NodeId, subscription.DisplayName);
+    }
+
+    /// <summary>
+    /// V2.0.0: Removes a subscription from a specific server.
+    /// </summary>
+    public async Task RemoveSubscriptionAsync(string serverId, string nodeId, CancellationToken ct = default)
+    {
+        await UpdateAsync(config =>
+        {
+            var server = config.Servers.FirstOrDefault(s => s.Id == serverId);
+            server?.Subscriptions.RemoveAll(s => s.NodeId == nodeId);
+        }, ct);
+
+        _logger.LogInformation("Subscription removed from server {ServerId}: {NodeId}", serverId, nodeId);
+    }
+
+    /// <summary>
+    /// V2.0.0: Gets a server configuration by ID.
+    /// </summary>
+    public OpcUaServerConfiguration? GetServer(string serverId)
+    {
+        return _current.Servers.FirstOrDefault(s => s.Id == serverId);
     }
 
     /// <summary>

@@ -3,9 +3,16 @@
 let refreshInterval = null;
 let miniCharts = {};  // Store mini chart instances
 
+// V2.0.0: Server filter state
+let selectedServerId = null;
+let availableServers = [];
+
 // Initialize dashboard
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   if (!initPage()) return;
+
+  // V2.0.0: Load servers list first
+  await loadServers();
 
   // Load data immediately
   refreshData();
@@ -13,6 +20,55 @@ document.addEventListener('DOMContentLoaded', () => {
   // Refresh every 2 seconds for smoother real-time
   refreshInterval = setInterval(refreshData, 2000);
 });
+
+// V2.0.0: Load available servers
+async function loadServers() {
+  try {
+    const response = await api('/data/servers');
+    if (!response) return;
+
+    availableServers = await response.json();
+    updateServerDropdown();
+  } catch (error) {
+    console.error('Error loading servers:', error);
+  }
+}
+
+// V2.0.0: Update server dropdown
+function updateServerDropdown() {
+  const dropdown = document.getElementById('serverFilter');
+  if (!dropdown) return;
+
+  dropdown.innerHTML = '<option value="">Tous les serveurs</option>';
+  availableServers.forEach(server => {
+    const name = server.serverName || server.serverId || 'Serveur inconnu';
+    dropdown.innerHTML += `<option value="${server.serverId || ''}">${name}</option>`;
+  });
+}
+
+// V2.0.0: Handle server filter change
+function onServerFilterChange() {
+  const dropdown = document.getElementById('serverFilter');
+  selectedServerId = dropdown.value || null;
+
+  // Clear existing cards to force rebuild with new server data
+  const container = document.getElementById('valuesContainer');
+  container.innerHTML = `
+    <div class="col-12 text-center py-5">
+      <i class="fas fa-spinner fa-spin fa-2x text-muted"></i>
+      <p class="mt-2 text-muted">Chargement...</p>
+    </div>
+  `;
+
+  // Destroy existing mini charts
+  Object.values(miniCharts).forEach(info => {
+    if (info.chart) info.chart.destroy();
+  });
+  miniCharts = {};
+
+  // Reload data with new filter
+  refreshData();
+}
 
 // Refresh all data
 async function refreshData() {
@@ -30,9 +86,14 @@ async function refreshData() {
   }
 }
 
-// Load latest values
+// Load latest values (V2.0.0: with server filter)
 async function loadLatestValues() {
-  const response = await api('/data/latest');
+  let url = '/data/latest';
+  if (selectedServerId) {
+    url += `?serverId=${encodeURIComponent(selectedServerId)}`;
+  }
+
+  const response = await api(url);
   if (!response) return;
 
   const data = await response.json();
@@ -58,16 +119,17 @@ async function loadLatestValues() {
   const existingCards = container.querySelectorAll('.value-card').length;
 
   if (existingCards !== data.length) {
-    // Build value cards with mini charts
+    // Build value cards with mini charts (V2.0.0: show server badge)
     container.innerHTML = data.map((item, index) => `
       <div class="col-xl-3 col-lg-4 col-md-6 col-sm-6 mb-3">
         <div class="card value-card h-100">
           <div class="card-body">
+            ${!selectedServerId && item.serverName ? `<span class="badge badge-secondary mb-1" style="font-size: 0.7rem;">${item.serverName}</span>` : ''}
             <div class="d-flex justify-content-between align-items-start">
               <div class="node-path" title="${item.browsePath || item.displayName}">
                 ${getNodeName(item.browsePath || item.displayName)}
               </div>
-              <a href="charts.html?nodeId=${encodeURIComponent(item.nodeId)}" class="text-muted" title="Voir historique">
+              <a href="charts.html?nodeId=${encodeURIComponent(item.nodeId)}${item.serverId ? '&serverId=' + encodeURIComponent(item.serverId) : ''}" class="text-muted" title="Voir historique">
                 <i class="fas fa-expand-alt"></i>
               </a>
             </div>

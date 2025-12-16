@@ -6,6 +6,10 @@ let autoRefreshInterval = null;
 let isAutoRefreshing = false;
 let currentChartType = 'line';  // line, area, bar, scatter
 
+// V2.0.0: Server filter state
+let selectedServerId = null;
+let availableServers = [];
+
 // Colors for multiple series
 const chartColors = [
   'rgb(54, 162, 235)',
@@ -106,11 +110,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Load nodes list
+  // V2.0.0: Load servers list first
+  await loadServers();
+
+  // Check for serverId in URL (V2.0.0)
+  const urlParams = new URLSearchParams(window.location.search);
+  const serverIdParam = urlParams.get('serverId');
+  if (serverIdParam) {
+    selectedServerId = serverIdParam;
+    document.getElementById('serverFilter').value = serverIdParam;
+  }
+
+  // Load nodes list (with server filter if set)
   await loadNodes();
 
   // Check for nodeId in URL
-  const urlParams = new URLSearchParams(window.location.search);
   const nodeId = urlParams.get('nodeId');
   if (nodeId) {
     $('#nodeSelect').val([nodeId]).trigger('change');
@@ -135,18 +149,75 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 });
 
-// Load available nodes
+// V2.0.0: Load available servers
+async function loadServers() {
+  try {
+    const response = await api('/data/servers');
+    if (!response) return;
+
+    availableServers = await response.json();
+    updateServerDropdown();
+  } catch (error) {
+    console.error('Error loading servers:', error);
+  }
+}
+
+// V2.0.0: Update server dropdown
+function updateServerDropdown() {
+  const dropdown = document.getElementById('serverFilter');
+  if (!dropdown) return;
+
+  dropdown.innerHTML = '<option value="">Tous les serveurs</option>';
+  availableServers.forEach(server => {
+    const name = server.serverName || server.serverId || 'Serveur inconnu';
+    dropdown.innerHTML += `<option value="${server.serverId || ''}">${name}</option>`;
+  });
+
+  // Restore selected value if any
+  if (selectedServerId) {
+    dropdown.value = selectedServerId;
+  }
+}
+
+// V2.0.0: Handle server filter change
+function onServerFilterChange() {
+  const dropdown = document.getElementById('serverFilter');
+  selectedServerId = dropdown.value || null;
+
+  // Reload nodes for selected server
+  loadNodes().then(() => {
+    // Clear current selection and chart
+    $('#nodeSelect').val([]).trigger('change');
+    chart.data.datasets = [];
+    chart.update();
+    document.getElementById('noData').style.display = 'block';
+    document.getElementById('chartContainer').style.display = 'none';
+    document.getElementById('statsRow').style.display = 'none';
+  });
+}
+
+// Load available nodes (V2.0.0: with server filter)
 async function loadNodes() {
   try {
-    const response = await api('/data/nodes');
+    let url = '/data/nodes';
+    if (selectedServerId) {
+      url += `?serverId=${encodeURIComponent(selectedServerId)}`;
+    }
+
+    const response = await api(url);
     if (!response) return;
 
     const nodes = await response.json();
     const select = document.getElementById('nodeSelect');
 
-    select.innerHTML = nodes.map(node =>
-      `<option value="${node.nodeId}">${node.browsePath || node.displayName || node.nodeId}</option>`
-    ).join('');
+    // V2.0.0: Show server name in label if not filtered
+    select.innerHTML = nodes.map(node => {
+      let label = node.browsePath || node.displayName || node.nodeId;
+      if (!selectedServerId && node.serverName) {
+        label = `[${node.serverName}] ${label}`;
+      }
+      return `<option value="${node.nodeId}" data-server-id="${node.serverId || ''}">${label}</option>`;
+    }).join('');
 
     $('#nodeSelect').trigger('change');
   } catch (error) {
@@ -155,7 +226,7 @@ async function loadNodes() {
   }
 }
 
-// Load chart data
+// Load chart data (V2.0.0: with server filter)
 async function loadChart() {
   const selectedNodes = $('#nodeSelect').val();
 
@@ -194,7 +265,12 @@ async function loadChart() {
     const nodeId = selectedNodes[i];
 
     try {
-      const response = await api(`/data/history?nodeId=${encodeURIComponent(nodeId)}&start=${start}&end=${end}&limit=5000`);
+      // V2.0.0: Include serverId in API call if filtered
+      let url = `/data/history?nodeId=${encodeURIComponent(nodeId)}&start=${start}&end=${end}&limit=5000`;
+      if (selectedServerId) {
+        url += `&serverId=${encodeURIComponent(selectedServerId)}`;
+      }
+      const response = await api(url);
       if (!response) continue;
 
       const data = await response.json();

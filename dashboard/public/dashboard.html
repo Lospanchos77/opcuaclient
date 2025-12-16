@@ -92,7 +92,11 @@
             <h1 class="m-0">Valeurs en temps réel</h1>
           </div>
           <div class="col-sm-6">
-            <div class="float-right">
+            <div class="float-right d-flex align-items-center">
+              <!-- V2.0.0: Server filter -->
+              <select id="serverFilter" class="form-control form-control-sm mr-3" style="width: auto;" onchange="onServerFilterChange()" title="Filtrer par serveur">
+                <option value="">Tous les serveurs</option>
+              </select>
               <span class="text-muted mr-2">Dernière mise à jour:</span>
               <span id="lastUpdate">-</span>
               <button class="btn btn-sm btn-outline-primary ml-2" onclick="refreshData()" title="Actualiser">

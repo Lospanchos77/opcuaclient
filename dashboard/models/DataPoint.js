@@ -4,6 +4,8 @@ const mongoose = require('mongoose');
 // created by the C# OPC UA client
 
 const dataPointSchema = new mongoose.Schema({
+  serverId: String,          // V2.0.0: Server identifier
+  serverName: String,        // V2.0.0: Server display name
   timestampUtc: Date,
   nodeId: String,
   displayName: String,
@@ -22,17 +24,42 @@ const dataPointSchema = new mongoose.Schema({
 // Index for efficient queries
 dataPointSchema.index({ nodeId: 1, timestampUtc: -1 });
 dataPointSchema.index({ timestampUtc: -1 });
+// V2.0.0: Indexes for server-filtered queries
+dataPointSchema.index({ serverId: 1, nodeId: 1, timestampUtc: -1 });
+dataPointSchema.index({ serverId: 1, timestampUtc: -1 });
 
 const DataPoint = mongoose.model('DataPoint', dataPointSchema);
 
 // Helper functions for data access
 const DataPointService = {
-  // Get latest value for each node
-  async getLatest(maxAge = 60000) {
+  // V2.0.0: Get list of distinct servers
+  async getServers() {
+    return DataPoint.aggregate([
+      {
+        $group: {
+          _id: '$serverId',
+          serverName: { $first: '$serverName' }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          serverId: '$_id',
+          serverName: { $ifNull: ['$serverName', 'Serveur inconnu'] }
+        }
+      },
+      { $sort: { serverName: 1 } }
+    ]);
+  },
+
+  // Get latest value for each node (V2.0.0: optional server filter)
+  async getLatest(maxAge = 60000, serverId = null) {
     const since = new Date(Date.now() - maxAge);
+    const match = { timestampUtc: { $gte: since } };
+    if (serverId) match.serverId = serverId;
 
     return DataPoint.aggregate([
-      { $match: { timestampUtc: { $gte: since } } },
+      { $match: match },
       { $sort: { timestampUtc: -1 } },
       {
         $group: {
@@ -41,7 +68,9 @@ const DataPointService = {
           lastTimestamp: { $first: '$timestampUtc' },
           displayName: { $first: '$displayName' },
           browsePath: { $first: '$browsePath' },
-          quality: { $first: '$quality' }
+          quality: { $first: '$quality' },
+          serverId: { $first: '$serverId' },        // V2.0.0
+          serverName: { $first: '$serverName' }     // V2.0.0
         }
       },
       {
@@ -52,16 +81,19 @@ const DataPointService = {
           browsePath: 1,
           lastValue: 1,
           lastTimestamp: 1,
-          quality: 1
+          quality: 1,
+          serverId: 1,                              // V2.0.0
+          serverName: { $ifNull: ['$serverName', 'Serveur inconnu'] }  // V2.0.0
         }
       },
-      { $sort: { browsePath: 1 } }
+      { $sort: { serverName: 1, browsePath: 1 } }
     ]);
   },
 
-  // Get history for a specific node
-  async getHistory(nodeId, start, end, limit = 1000) {
+  // Get history for a specific node (V2.0.0: optional server filter)
+  async getHistory(nodeId, start, end, limit = 1000, serverId = null) {
     const query = { nodeId };
+    if (serverId) query.serverId = serverId;  // V2.0.0
 
     if (start || end) {
       query.timestampUtc = {};
@@ -72,18 +104,23 @@ const DataPointService = {
     return DataPoint.find(query)
       .sort({ timestampUtc: 1 })
       .limit(limit)
-      .select('timestampUtc value quality -_id')
+      .select('timestampUtc value quality serverId serverName -_id')  // V2.0.0: include server info
       .lean();
   },
 
-  // Get list of distinct nodes
-  async getNodes() {
+  // Get list of distinct nodes (V2.0.0: optional server filter)
+  async getNodes(serverId = null) {
+    const match = serverId ? { serverId } : {};
+
     return DataPoint.aggregate([
+      { $match: match },  // V2.0.0: filter by server
       {
         $group: {
           _id: '$nodeId',
           displayName: { $first: '$displayName' },
-          browsePath: { $first: '$browsePath' }
+          browsePath: { $first: '$browsePath' },
+          serverId: { $first: '$serverId' },        // V2.0.0
+          serverName: { $first: '$serverName' }     // V2.0.0
         }
       },
       {
@@ -91,16 +128,19 @@ const DataPointService = {
           _id: 0,
           nodeId: '$_id',
           displayName: 1,
-          browsePath: 1
+          browsePath: 1,
+          serverId: 1,                              // V2.0.0
+          serverName: { $ifNull: ['$serverName', 'Serveur inconnu'] }  // V2.0.0
         }
       },
-      { $sort: { browsePath: 1 } }
+      { $sort: { serverName: 1, browsePath: 1 } }
     ]);
   },
 
-  // Get statistics
-  async getStats(start, end) {
+  // Get statistics (V2.0.0: optional server filter)
+  async getStats(start, end, serverId = null) {
     const match = {};
+    if (serverId) match.serverId = serverId;  // V2.0.0
 
     if (start || end) {
       match.timestampUtc = {};
@@ -118,6 +158,8 @@ const DataPointService = {
           _id: '$nodeId',
           displayName: { $first: '$displayName' },
           browsePath: { $first: '$browsePath' },
+          serverId: { $first: '$serverId' },        // V2.0.0
+          serverName: { $first: '$serverName' },    // V2.0.0
           pointCount: { $sum: 1 },
           avgValue: { $avg: '$value' },
           minValue: { $min: '$value' },
@@ -132,6 +174,8 @@ const DataPointService = {
           nodeId: '$_id',
           displayName: 1,
           browsePath: 1,
+          serverId: 1,                              // V2.0.0
+          serverName: { $ifNull: ['$serverName', 'Serveur inconnu'] },  // V2.0.0
           pointCount: 1,
           avgValue: { $round: ['$avgValue', 2] },
           minValue: 1,
@@ -140,7 +184,7 @@ const DataPointService = {
           lastTimestamp: 1
         }
       },
-      { $sort: { browsePath: 1 } }
+      { $sort: { serverName: 1, browsePath: 1 } }
     ]);
   },
 

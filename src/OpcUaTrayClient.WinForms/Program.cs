@@ -180,13 +180,13 @@ internal static class Program
                 cfg.DryRunMode);
         });
 
-        // OPC UA client
-        services.AddSingleton<OpcUaClientService>(sp =>
+        // OPC UA client manager (V2.0.0 multi-server support)
+        services.AddSingleton<OpcUaClientManager>(sp =>
         {
             var cfg = sp.GetRequiredService<ConfigurationService>().Current;
-            return new OpcUaClientService(
+            return new OpcUaClientManager(
                 sp.GetRequiredService<DataPointChannel>(),
-                sp.GetRequiredService<ILogger<OpcUaClientService>>(),
+                sp.GetRequiredService<ILoggerFactory>(),
                 cfg.SessionTimeoutMs,
                 cfg.KeepAliveIntervalMs);
         });

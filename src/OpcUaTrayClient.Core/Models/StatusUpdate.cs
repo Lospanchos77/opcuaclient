@@ -60,6 +60,16 @@ public sealed record StatusUpdate
     /// Timestamp of the last received data point.
     /// </summary>
     public DateTime? LastDataPointTime { get; init; }
+
+    /// <summary>
+    /// V2.0.0: Number of currently connected OPC UA servers.
+    /// </summary>
+    public int ConnectedServerCount { get; init; }
+
+    /// <summary>
+    /// V2.0.0: Total number of configured OPC UA servers.
+    /// </summary>
+    public int TotalServerCount { get; init; }
 }
 
 /// <summary>

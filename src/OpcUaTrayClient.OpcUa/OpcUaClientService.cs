@@ -14,11 +14,16 @@ namespace OpcUaTrayClient.OpcUa;
 /// - TryWrite() is NON-BLOCKING - acquisition never waits for persistence
 /// - Automatic reconnection with exponential backoff
 /// - Stores subscription definitions for re-subscription after reconnect
+/// - V2.0.0: Each instance is associated with a specific server (ServerId/ServerName)
 /// </summary>
 public sealed class OpcUaClientService : IDisposable
 {
     private readonly ILogger<OpcUaClientService> _logger;
     private readonly DataPointChannel _channel;
+
+    // Server identification (V2.0.0)
+    private readonly string _serverId;
+    private readonly string _serverName;
 
     private ApplicationConfiguration? _appConfig;
     private Session? _session;
@@ -37,6 +42,17 @@ public sealed class OpcUaClientService : IDisposable
     private long _totalDataPointsReceived;
     private DateTime _lastDataPointTime;
     private string? _lastError;
+    private string? _endpointUrl;
+
+    /// <summary>
+    /// Unique identifier for this server (from OpcUaServerConfiguration.Id).
+    /// </summary>
+    public string ServerId => _serverId;
+
+    /// <summary>
+    /// Human-readable name for this server (from OpcUaServerConfiguration.Name).
+    /// </summary>
+    public string ServerName => _serverName;
 
     /// <summary>
     /// Current connection state.
@@ -59,6 +75,11 @@ public sealed class OpcUaClientService : IDisposable
     public string? LastError => _lastError;
 
     /// <summary>
+    /// Current endpoint URL.
+    /// </summary>
+    public string? EndpointUrl => _endpointUrl;
+
+    /// <summary>
     /// Event raised when connection state changes.
     /// </summary>
     public event EventHandler<OpcUaConnectionState>? ConnectionStateChanged;
@@ -68,14 +89,27 @@ public sealed class OpcUaClientService : IDisposable
     /// </summary>
     public event EventHandler<OpcUaDataPoint>? DataPointReceived;
 
+    /// <summary>
+    /// Creates a new OPC UA client service for a specific server.
+    /// </summary>
+    /// <param name="serverId">Unique server identifier</param>
+    /// <param name="serverName">Human-readable server name</param>
+    /// <param name="channel">Data point channel for non-blocking writes</param>
+    /// <param name="logger">Logger instance</param>
+    /// <param name="sessionTimeoutMs">Session timeout in milliseconds</param>
+    /// <param name="keepAliveIntervalMs">Keepalive interval in milliseconds</param>
     public OpcUaClientService(
+        string serverId,
+        string serverName,
         DataPointChannel channel,
         ILogger<OpcUaClientService> logger,
         int sessionTimeoutMs = 600000,
         int keepAliveIntervalMs = 5000)
     {
-        _channel = channel;
-        _logger = logger;
+        _serverId = serverId ?? throw new ArgumentNullException(nameof(serverId));
+        _serverName = serverName ?? throw new ArgumentNullException(nameof(serverName));
+        _channel = channel ?? throw new ArgumentNullException(nameof(channel));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _sessionTimeout = TimeSpan.FromMilliseconds(sessionTimeoutMs);
         _keepAliveInterval = TimeSpan.FromMilliseconds(keepAliveIntervalMs);
     }
@@ -141,8 +175,9 @@ public sealed class OpcUaClientService : IDisposable
             _session.KeepAlive += OnSessionKeepAlive;
             _session.SessionClosing += OnSessionClosing;
 
+            _endpointUrl = endpointUrl;
             SetConnectionState(OpcUaConnectionState.Connected);
-            _logger.LogInformation("Connected to OPC UA server: {Endpoint}", endpointUrl);
+            _logger.LogInformation("[{ServerName}] Connected to OPC UA server: {Endpoint}", _serverName, endpointUrl);
         }
         catch (Exception ex)
         {
@@ -427,6 +462,8 @@ public sealed class OpcUaClientService : IDisposable
 
                 var dataPoint = new OpcUaDataPoint
                 {
+                    ServerId = _serverId,
+                    ServerName = _serverName,
                     TimestampUtc = DateTime.UtcNow,
                     NodeId = nodeId,
                     DisplayName = item.DisplayName,
@@ -505,11 +542,15 @@ public sealed class OpcUaClientService : IDisposable
                 // Clean up old session
                 await CleanupSessionAsync();
 
-                // Get endpoint URL from old session
-                var endpointUrl = _session?.Endpoint?.EndpointUrl ?? "opc.tcp://localhost:53530/OPCUA/SimulationServer";
+                // Use stored endpoint URL
+                if (string.IsNullOrEmpty(_endpointUrl))
+                {
+                    _logger.LogError("[{ServerName}] No endpoint URL stored for reconnection", _serverName);
+                    break;
+                }
 
                 // Reconnect
-                await ConnectAsync(endpointUrl, ct);
+                await ConnectAsync(_endpointUrl, ct);
 
                 // Re-subscribe to nodes
                 List<SubscriptionDefinition> nodesToSubscribe;

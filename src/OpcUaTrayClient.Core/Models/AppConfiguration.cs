@@ -9,24 +9,36 @@ namespace OpcUaTrayClient.Core.Models;
 public sealed class AppConfiguration
 {
     // ─────────────────────────────────────────────────────────────────────────
-    // OPC UA CONNECTION
+    // OPC UA SERVERS (V2.0.0 - Multi-Server Support)
     // ─────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// OPC UA server endpoint URL.
-    /// Example: opc.tcp://localhost:53530/OPCUA/SimulationServer
+    /// List of OPC UA server configurations. Each server has its own endpoint and subscriptions.
+    /// This is the V2.0.0 multi-server architecture.
     /// </summary>
-    [JsonPropertyName("opcUaEndpointUrl")]
-    public string OpcUaEndpointUrl { get; set; } = "opc.tcp://localhost:53530/OPCUA/SimulationServer";
+    [JsonPropertyName("servers")]
+    public List<OpcUaServerConfiguration> Servers { get; set; } = new();
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // OPC UA CONNECTION (Global defaults / Legacy V1.0.0)
+    // ─────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Session timeout in milliseconds. The session will be recreated if idle for this long.
+    /// [DEPRECATED - V1.0.0] Single OPC UA server endpoint URL.
+    /// Kept for backward compatibility. Use Servers list instead.
+    /// Will be auto-migrated to Servers on first load.
+    /// </summary>
+    [JsonPropertyName("opcUaEndpointUrl")]
+    public string OpcUaEndpointUrl { get; set; } = "";
+
+    /// <summary>
+    /// Default session timeout in milliseconds. Used when server-specific value is not set.
     /// </summary>
     [JsonPropertyName("sessionTimeoutMs")]
     public int SessionTimeoutMs { get; set; } = 600_000; // 10 minutes
 
     /// <summary>
-    /// Keepalive interval in milliseconds. Sent to detect connection loss.
+    /// Default keepalive interval in milliseconds. Used when server-specific value is not set.
     /// </summary>
     [JsonPropertyName("keepAliveIntervalMs")]
     public int KeepAliveIntervalMs { get; set; } = 5_000; // 5 seconds
@@ -147,11 +159,13 @@ public sealed class AppConfiguration
     public int MaxPointsPerSecond { get; set; } = 0;
 
     // ─────────────────────────────────────────────────────────────────────────
-    // SUBSCRIPTIONS
+    // SUBSCRIPTIONS (Legacy V1.0.0)
     // ─────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// List of OPC UA node subscriptions.
+    /// [DEPRECATED - V1.0.0] Global list of OPC UA node subscriptions.
+    /// Kept for backward compatibility. Use Servers[].Subscriptions instead.
+    /// Will be auto-migrated to the first server on load.
     /// </summary>
     [JsonPropertyName("subscriptions")]
     public List<SubscriptionDefinition> Subscriptions { get; set; } = new();

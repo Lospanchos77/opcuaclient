@@ -63,7 +63,22 @@ public sealed class MongoDataPointSink : IDataPointSink
                 // Index for time-based queries
                 new CreateIndexModel<BsonDocument>(
                     Builders<BsonDocument>.IndexKeys.Descending("timestampUtc"),
-                    new CreateIndexOptions { Background = true, Name = "idx_timestampUtc" })
+                    new CreateIndexOptions { Background = true, Name = "idx_timestampUtc" }),
+
+                // V2.0.0: Compound index for server + node + time queries
+                new CreateIndexModel<BsonDocument>(
+                    Builders<BsonDocument>.IndexKeys
+                        .Ascending("serverId")
+                        .Ascending("nodeId")
+                        .Descending("sourceTimestamp"),
+                    new CreateIndexOptions { Background = true, Name = "idx_serverId_nodeId_sourceTimestamp" }),
+
+                // V2.0.0: Index for server + time queries
+                new CreateIndexModel<BsonDocument>(
+                    Builders<BsonDocument>.IndexKeys
+                        .Ascending("serverId")
+                        .Descending("timestampUtc"),
+                    new CreateIndexOptions { Background = true, Name = "idx_serverId_timestampUtc" })
             };
 
             // TTL index for automatic data cleanup (if enabled)
@@ -180,6 +195,8 @@ public sealed class MongoDataPointSink : IDataPointSink
     {
         var doc = new BsonDocument
         {
+            { "serverId", dp.ServerId },       // V2.0.0: Server identification
+            { "serverName", dp.ServerName },   // V2.0.0: Server display name
             { "timestampUtc", dp.TimestampUtc },
             { "nodeId", dp.NodeId },
             { "displayName", dp.DisplayName },

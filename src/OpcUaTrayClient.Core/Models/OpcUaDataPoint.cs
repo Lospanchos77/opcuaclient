@@ -18,6 +18,20 @@ public sealed class OpcUaDataPoint
     public string? Id { get; set; }
 
     /// <summary>
+    /// Unique identifier of the OPC UA server that generated this data point.
+    /// Corresponds to OpcUaServerConfiguration.Id.
+    /// </summary>
+    [BsonElement("serverId")]
+    public string ServerId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Human-readable name of the OPC UA server that generated this data point.
+    /// Corresponds to OpcUaServerConfiguration.Name.
+    /// </summary>
+    [BsonElement("serverName")]
+    public string ServerName { get; set; } = string.Empty;
+
+    /// <summary>
     /// UTC timestamp when the data point was received by the client.
     /// </summary>
     [BsonElement("timestampUtc")]

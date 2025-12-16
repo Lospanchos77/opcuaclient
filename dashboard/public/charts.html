@@ -93,7 +93,16 @@
           </div>
           <div class="card-body">
             <div class="row">
-              <div class="col-md-6">
+              <!-- V2.0.0: Server filter -->
+              <div class="col-md-2">
+                <div class="form-group">
+                  <label>Serveur</label>
+                  <select id="serverFilter" class="form-control" onchange="onServerFilterChange()" title="Filtrer par serveur">
+                    <option value="">Tous les serveurs</option>
+                  </select>
+                </div>
+              </div>
+              <div class="col-md-4">
                 <div class="form-group">
                   <label>Variables</label>
                   <select id="nodeSelect" class="form-control select2" multiple="multiple" data-placeholder="Selectionnez les variables..." title="Sélection des variables">

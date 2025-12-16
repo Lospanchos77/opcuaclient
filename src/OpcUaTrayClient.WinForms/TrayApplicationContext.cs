@@ -25,7 +25,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly IServiceProvider _services;
     private readonly ILogger<TrayApplicationContext> _logger;
     private readonly ConfigurationService _configService;
-    private readonly OpcUaClientService _opcUaClient;
+    private readonly OpcUaClientManager _opcUaManager;  // V2.0.0: Multi-server manager
     private readonly DataPersistenceService _persistenceService;
     private readonly DataPointChannel _channel;
     private readonly MongoHealthMonitor _healthMonitor;
@@ -58,7 +58,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         _services = services;
         _logger = services.GetRequiredService<ILogger<TrayApplicationContext>>();
         _configService = services.GetRequiredService<ConfigurationService>();
-        _opcUaClient = services.GetRequiredService<OpcUaClientService>();
+        _opcUaManager = services.GetRequiredService<OpcUaClientManager>();  // V2.0.0
         _persistenceService = services.GetRequiredService<DataPersistenceService>();
         _channel = services.GetRequiredService<DataPointChannel>();
         _healthMonitor = services.GetRequiredService<MongoHealthMonitor>();
@@ -85,21 +85,22 @@ public sealed class TrayApplicationContext : ApplicationContext
         _statusTimer.Tick += OnStatusTimerTick;
         _statusTimer.Start();
 
-        // Subscribe to events
-        _opcUaClient.ConnectionStateChanged += OnConnectionStateChanged;
+        // Subscribe to events (V2.0.0: use manager events)
+        _opcUaManager.ServerConnectionStateChanged += OnServerConnectionStateChanged;
         _persistenceService.ModeChanged += OnPersistenceModeChanged;
         _healthMonitor.HealthChanged += OnHealthChanged;
 
-        // Show config form on first launch (no subscriptions configured yet)
-        if (_configService.Current.Subscriptions.Count == 0)
+        // Show config form on first launch (no servers configured yet)
+        var hasSubscriptions = _configService.Current.Servers.Any(s => s.Subscriptions.Count > 0);
+        if (_configService.Current.Servers.Count == 0 || !hasSubscriptions)
         {
             _logger.LogInformation("First launch detected, opening configuration form");
             ShowConfigForm();
         }
-        // Auto-start acquisition if there are saved subscriptions
+        // Auto-start acquisition if there are saved servers with subscriptions
         else
         {
-            _logger.LogInformation("Subscriptions found, auto-starting acquisition");
+            _logger.LogInformation("Servers found ({Count}), auto-starting acquisition", _configService.Current.Servers.Count);
             _ = StartAcquisitionAsync();
         }
 
@@ -178,21 +179,23 @@ public sealed class TrayApplicationContext : ApplicationContext
             _acquisitionCts = new CancellationTokenSource();
             _persistenceTask = _persistenceService.StartAsync(_acquisitionCts.Token);
 
-            // Connect to OPC UA server
-            await _opcUaClient.ConnectAsync(_configService.Current.OpcUaEndpointUrl, _acquisitionCts.Token);
-
-            // Subscribe to configured nodes
-            var subscriptions = _configService.Current.Subscriptions;
-            if (subscriptions.Count > 0)
+            // V2.0.0: Connect to all configured OPC UA servers
+            var enabledServers = _configService.Current.Servers.Where(s => s.Enabled).ToList();
+            if (enabledServers.Count > 0)
             {
-                await _opcUaClient.SubscribeToNodesAsync(subscriptions, _acquisitionCts.Token);
+                await _opcUaManager.ConnectAllAsync(enabledServers, _acquisitionCts.Token);
+            }
+            else
+            {
+                _logger.LogWarning("No enabled servers to connect to");
             }
 
             _acquisitionRunning = true;
             _startMenuItem.Enabled = false;
             _stopMenuItem.Enabled = true;
 
-            _logger.LogInformation("Acquisition started");
+            _logger.LogInformation("Acquisition started ({Connected}/{Total} servers)",
+                _opcUaManager.ConnectedServerCount, _opcUaManager.TotalServerCount);
         }
         catch (Exception ex)
         {
@@ -212,8 +215,8 @@ public sealed class TrayApplicationContext : ApplicationContext
             _stopMenuItem.Enabled = false;
             _logger.LogInformation("Stopping acquisition...");
 
-            // Disconnect from OPC UA
-            await _opcUaClient.DisconnectAsync();
+            // V2.0.0: Disconnect from all OPC UA servers
+            await _opcUaManager.DisconnectAllAsync();
 
             // Stop persistence service
             _acquisitionCts?.Cancel();
@@ -237,10 +240,10 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void OnStatusTimerTick(object? sender, EventArgs e)
     {
-        // Calculate points per second
+        // Calculate points per second (V2.0.0: use aggregated stats from manager)
         var now = DateTime.UtcNow;
         var elapsed = (now - _lastStatusUpdate).TotalSeconds;
-        var currentCount = _opcUaClient.TotalDataPointsReceived;
+        var currentCount = _opcUaManager.TotalDataPointsReceived;
         var pointsPerSecond = elapsed > 0 ? (int)((currentCount - _lastDataPointCount) / elapsed) : 0;
 
         _lastDataPointCount = currentCount;
@@ -256,9 +259,11 @@ public sealed class TrayApplicationContext : ApplicationContext
             DataPointsPerSecond = pointsPerSecond,
             TotalDataPointsReceived = currentCount,
             TotalDataPointsPersisted = _persistenceService.TotalPersisted,
-            ConnectionState = _opcUaClient.ConnectionState,
-            LastError = _opcUaClient.LastError,
-            LastDataPointTime = _opcUaClient.LastDataPointTime
+            ConnectionState = _opcUaManager.GetAggregatedState(),  // V2.0.0: Aggregated state
+            LastError = null,  // V2.0.0: Would need aggregation logic
+            LastDataPointTime = _opcUaManager.LastDataPointTime,
+            ConnectedServerCount = _opcUaManager.ConnectedServerCount,  // V2.0.0
+            TotalServerCount = _opcUaManager.TotalServerCount  // V2.0.0
         };
 
         ((IProgress<StatusUpdate>)_statusProgress).Report(update);
@@ -345,10 +350,11 @@ public sealed class TrayApplicationContext : ApplicationContext
     [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto)]
     private static extern bool DestroyIcon(IntPtr handle);
 
-    private void OnConnectionStateChanged(object? sender, OpcUaConnectionState state)
+    private void OnServerConnectionStateChanged(object? sender, ServerConnectionStateChangedEventArgs e)
     {
         // UI update will happen via status timer
-        _logger.LogInformation("OPC UA connection state changed: {State}", state);
+        _logger.LogInformation("OPC UA server {ServerName} ({ServerId}) state changed: {OldState} -> {NewState}",
+            e.ServerName, e.ServerId, e.OldState, e.NewState);
     }
 
     private void OnPersistenceModeChanged(object? sender, PersistenceModeChangedEventArgs e)

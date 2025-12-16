@@ -6,47 +6,43 @@ using OpcUaTrayClient.Core.Models;
 using OpcUaTrayClient.OpcUa;
 using OpcUaTrayClient.Persistence;
 using OpcUaTrayClient.Persistence.MongoDB;
+using OpcUaTrayClient.WinForms.Controls;
 
 namespace OpcUaTrayClient.WinForms.Forms;
 
 /// <summary>
-/// Main configuration form with tabs for Connection, Subscriptions, Status, and Logs.
+/// V2.0.0: Main configuration form with multi-server support.
+/// Tabs: Serveurs (list + MongoDB), [Dynamic Server Tabs], Etat, Journaux
 /// </summary>
 public partial class ConfigForm : Form
 {
     private readonly IServiceProvider _services;
     private readonly ILogger<ConfigForm> _logger;
     private readonly ConfigurationService _configService;
-    private readonly OpcUaClientService _opcUaClient;
+    private readonly OpcUaClientManager _clientManager;
     private readonly MongoHealthMonitor _healthMonitor;
     private readonly DataPersistenceService _persistenceService;
 
     /// <summary>
-    /// Événement déclenché quand l'utilisateur demande le démarrage de l'acquisition.
+    /// Event raised when user requests acquisition start.
     /// </summary>
     public event EventHandler? StartAcquisitionRequested;
 
     // Controls
     private TabControl _tabControl = null!;
+    private readonly Dictionary<string, TabPage> _serverTabs = new();
+    private readonly Dictionary<string, ServerTabPage> _serverTabPages = new();
 
-    // Connection tab
-    private TextBox _txtOpcUaEndpoint = null!;
-    private Button _btnTestOpcUa = null!;
-    private Label _lblOpcUaStatus = null!;
+    // Servers tab
+    private ListView _listServers = null!;
+    private Button _btnAddServer = null!;
+    private Button _btnRemoveServer = null!;
+    private Button _btnEditServer = null!;
     private TextBox _txtMongoConnectionString = null!;
     private TextBox _txtMongoDatabase = null!;
     private TextBox _txtMongoCollection = null!;
     private Button _btnTestMongo = null!;
     private Label _lblMongoStatus = null!;
-
-    // Subscriptions tab
-    private TreeView _treeNodes = null!;
-    private Button _btnRefreshNodes = null!;
-    private DataGridView _gridSubscriptions = null!;
-    private NumericUpDown _numSamplingInterval = null!;
-    private NumericUpDown _numPublishingInterval = null!;
-    private Button _btnAddSubscription = null!;
-    private Button _btnRemoveSubscription = null!;
 
     // Status tab
     private Label _lblOpcUaConnectionState = null!;
@@ -57,6 +53,7 @@ public partial class ConfigForm : Form
     private Label _lblTotalAcquired = null!;
     private Label _lblTotalPersisted = null!;
     private Label _lblDropped = null!;
+    private Label _lblConnectedServers = null!;
     private CheckBox _chkForceJsonOnly = null!;
     private CheckBox _chkDryRunMode = null!;
     private TextBox _txtJsonFallbackPath = null!;
@@ -71,24 +68,28 @@ public partial class ConfigForm : Form
         _services = services;
         _logger = services.GetRequiredService<ILogger<ConfigForm>>();
         _configService = services.GetRequiredService<ConfigurationService>();
-        _opcUaClient = services.GetRequiredService<OpcUaClientService>();
+        _clientManager = services.GetRequiredService<OpcUaClientManager>();
         _healthMonitor = services.GetRequiredService<MongoHealthMonitor>();
         _persistenceService = services.GetRequiredService<DataPersistenceService>();
 
         InitializeComponent();
         LoadConfiguration();
+        CreateServerTabs();
+
+        // Subscribe to server state changes
+        _clientManager.ServerConnectionStateChanged += OnServerConnectionStateChanged;
     }
 
     private void InitializeComponent()
     {
         // Get version from assembly
         var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
-        var versionString = version != null ? $"{version.Major}.{version.Minor}.{version.Build}" : "1.0.0";
+        var versionString = version != null ? $"{version.Major}.{version.Minor}.{version.Build}" : "2.0.0";
 
         // Form properties
         Text = $"I.F OPC-UA CLIENT V.{versionString}";
-        Size = new Size(800, 600);
-        MinimumSize = new Size(600, 400);
+        Size = new Size(900, 650);
+        MinimumSize = new Size(700, 500);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.Sizable;
 
@@ -113,7 +114,7 @@ public partial class ConfigForm : Form
         var aboutMenuItem = new ToolStripMenuItem("A propos", null, (s, e) =>
         {
             MessageBox.Show(
-                $"I.F OPC-UA CLIENT\nVersion {versionString}\n\nClient OPC UA avec persistance MongoDB",
+                $"I.F OPC-UA CLIENT\nVersion {versionString}\n\nClient OPC UA multi-serveur avec persistance MongoDB",
                 "A propos",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
@@ -155,13 +156,12 @@ public partial class ConfigForm : Form
             Dock = DockStyle.Fill
         };
 
-        _tabControl.TabPages.Add(CreateConnectionTab());
-        _tabControl.TabPages.Add(CreateSubscriptionsTab());
+        _tabControl.TabPages.Add(CreateServersTab());
+        // Dynamic server tabs will be added after loading config
         _tabControl.TabPages.Add(CreateStatusTab());
         _tabControl.TabPages.Add(CreateLogsTab());
 
-        // Add controls - TabControl (Fill) first, then docked panels
-        // This ensures TabControl fills remaining space after other docks are applied
+        // Add controls
         SuspendLayout();
         Controls.Add(_tabControl);
         Controls.Add(buttonPanel);
@@ -169,190 +169,129 @@ public partial class ConfigForm : Form
         ResumeLayout(true);
     }
 
-    private TabPage CreateConnectionTab()
+    private TabPage CreateServersTab()
     {
-        var tab = new TabPage("Connexion");
-        var panel = new TableLayoutPanel
+        var tab = new TabPage("Serveurs");
+        var mainPanel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 3,
-            RowCount = 10,
+            ColumnCount = 1,
+            RowCount = 2,
             Padding = new Padding(10)
         };
 
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
+        mainPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+        mainPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+
+        // ─── Server List Section ───
+        var serverPanel = new GroupBox
+        {
+            Text = "Serveurs OPC UA",
+            Dock = DockStyle.Fill
+        };
+
+        var serverLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            Padding = new Padding(5)
+        };
+        serverLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        serverLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
+
+        _listServers = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false
+        };
+        _listServers.Columns.Add("Nom", 150);
+        _listServers.Columns.Add("URL", 300);
+        _listServers.Columns.Add("Etat", 80);
+        _listServers.Columns.Add("Abonnements", 80);
+        _listServers.DoubleClick += (s, e) => EditSelectedServer();
+        serverLayout.Controls.Add(_listServers, 0, 0);
+
+        var buttonStack = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false
+        };
+
+        _btnAddServer = new Button { Text = "Ajouter", Width = 100, Height = 28 };
+        _btnAddServer.Click += async (s, e) => await AddServerAsync();
+        buttonStack.Controls.Add(_btnAddServer);
+
+        _btnEditServer = new Button { Text = "Modifier", Width = 100, Height = 28, Margin = new Padding(0, 5, 0, 0) };
+        _btnEditServer.Click += (s, e) => EditSelectedServer();
+        buttonStack.Controls.Add(_btnEditServer);
+
+        _btnRemoveServer = new Button { Text = "Supprimer", Width = 100, Height = 28, Margin = new Padding(0, 5, 0, 0) };
+        _btnRemoveServer.Click += async (s, e) => await RemoveSelectedServerAsync();
+        buttonStack.Controls.Add(_btnRemoveServer);
+
+        serverLayout.Controls.Add(buttonStack, 1, 0);
+        serverPanel.Controls.Add(serverLayout);
+        mainPanel.Controls.Add(serverPanel, 0, 0);
+
+        // ─── MongoDB Section ───
+        var mongoPanel = new GroupBox
+        {
+            Text = "MongoDB (stockage partage)",
+            Dock = DockStyle.Fill
+        };
+
+        var mongoLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 3,
+            RowCount = 5,
+            Padding = new Padding(5)
+        };
+        mongoLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
+        mongoLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        mongoLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
 
         var row = 0;
 
-        // OPC UA Section
-        var lblOpcUa = new Label { Text = "Connexion OPC UA", Font = new Font(Font, FontStyle.Bold), AutoSize = true };
-        panel.Controls.Add(lblOpcUa, 0, row++);
-
-        panel.Controls.Add(new Label { Text = "URL du serveur :", Anchor = AnchorStyles.Left }, 0, row);
-        _txtOpcUaEndpoint = new TextBox { Dock = DockStyle.Fill };
-        panel.Controls.Add(_txtOpcUaEndpoint, 1, row);
-        _btnTestOpcUa = new Button { Text = "Tester", Dock = DockStyle.Fill };
-        _btnTestOpcUa.Click += async (s, e) => await TestOpcUaConnectionAsync();
-        panel.Controls.Add(_btnTestOpcUa, 2, row++);
-
-        _lblOpcUaStatus = new Label { Text = "", ForeColor = Color.Gray, Dock = DockStyle.Fill };
-        panel.Controls.Add(_lblOpcUaStatus, 1, row++);
-        panel.SetColumnSpan(_lblOpcUaStatus, 2);
-
-        // Separator
-        panel.Controls.Add(new Label { Height = 20 }, 0, row++);
-
-        // MongoDB Section
-        var lblMongo = new Label { Text = "Connexion MongoDB", Font = new Font(Font, FontStyle.Bold), AutoSize = true };
-        panel.Controls.Add(lblMongo, 0, row++);
-
-        panel.Controls.Add(new Label { Text = "Chaîne de connexion :", Anchor = AnchorStyles.Left }, 0, row);
+        mongoLayout.Controls.Add(new Label { Text = "Chaine de connexion :", Anchor = AnchorStyles.Left }, 0, row);
         _txtMongoConnectionString = new TextBox { Dock = DockStyle.Fill };
-        panel.Controls.Add(_txtMongoConnectionString, 1, row);
+        mongoLayout.Controls.Add(_txtMongoConnectionString, 1, row);
         _btnTestMongo = new Button { Text = "Tester", Dock = DockStyle.Fill };
         _btnTestMongo.Click += async (s, e) => await TestMongoConnectionAsync();
-        panel.Controls.Add(_btnTestMongo, 2, row++);
+        mongoLayout.Controls.Add(_btnTestMongo, 2, row++);
 
         _lblMongoStatus = new Label { Text = "", ForeColor = Color.Gray, Dock = DockStyle.Fill };
-        panel.Controls.Add(_lblMongoStatus, 1, row++);
-        panel.SetColumnSpan(_lblMongoStatus, 2);
+        mongoLayout.Controls.Add(_lblMongoStatus, 1, row++);
+        mongoLayout.SetColumnSpan(_lblMongoStatus, 2);
 
-        panel.Controls.Add(new Label { Text = "Base de données :", Anchor = AnchorStyles.Left }, 0, row);
+        mongoLayout.Controls.Add(new Label { Text = "Base de donnees :", Anchor = AnchorStyles.Left }, 0, row);
         _txtMongoDatabase = new TextBox { Dock = DockStyle.Fill };
-        panel.Controls.Add(_txtMongoDatabase, 1, row++);
+        mongoLayout.Controls.Add(_txtMongoDatabase, 1, row++);
 
-        panel.Controls.Add(new Label { Text = "Collection :", Anchor = AnchorStyles.Left }, 0, row);
+        mongoLayout.Controls.Add(new Label { Text = "Collection :", Anchor = AnchorStyles.Left }, 0, row);
         _txtMongoCollection = new TextBox { Dock = DockStyle.Fill };
-        panel.Controls.Add(_txtMongoCollection, 1, row++);
+        mongoLayout.Controls.Add(_txtMongoCollection, 1, row++);
 
-        tab.Controls.Add(panel);
-        return tab;
-    }
+        mongoPanel.Controls.Add(mongoLayout);
+        mainPanel.Controls.Add(mongoPanel, 0, 1);
 
-    private TabPage CreateSubscriptionsTab()
-    {
-        var tab = new TabPage("Abonnements");
-        var splitContainer = new SplitContainer
-        {
-            Dock = DockStyle.Fill,
-            Orientation = Orientation.Horizontal,  // Haut/Bas au lieu de Gauche/Droite
-            SplitterDistance = 250,
-            Panel1MinSize = 150,
-            Panel2MinSize = 150
-        };
-
-        // Top panel - TreeView for browsing nodes
-        var topPanel = new Panel { Dock = DockStyle.Fill };
-
-        var headerPanel = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Top,
-            Height = 30,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false
-        };
-
-        var lblBrowse = new Label
-        {
-            Text = "Parcourir les nœuds OPC UA",
-            AutoSize = true,
-            Font = new Font(Font, FontStyle.Bold),
-            Margin = new Padding(0, 6, 10, 0)
-        };
-        headerPanel.Controls.Add(lblBrowse);
-
-        _btnRefreshNodes = new Button
-        {
-            Text = "Actualiser",
-            Width = 100,
-            Height = 25
-        };
-        _btnRefreshNodes.Click += async (s, e) => await RefreshNodesAsync();
-        headerPanel.Controls.Add(_btnRefreshNodes);
-
-        topPanel.Controls.Add(headerPanel);
-
-        _treeNodes = new TreeView
-        {
-            Dock = DockStyle.Fill,
-            CheckBoxes = true
-        };
-        _treeNodes.BeforeExpand += async (s, e) => await OnNodeExpandingAsync(e);
-        _treeNodes.AfterCheck += OnNodeAfterCheck;
-        topPanel.Controls.Add(_treeNodes);
-
-        // Important: Add TreeView first so it fills remaining space
-        topPanel.Controls.SetChildIndex(_treeNodes, 0);
-        topPanel.Controls.SetChildIndex(headerPanel, 1);
-
-        splitContainer.Panel1.Controls.Add(topPanel);
-
-        // Bottom panel - Subscription grid and controls
-        var bottomPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 5, 0, 0) };
-
-        // Settings panel with all controls on one line
-        var settingsPanel = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Top,
-            Height = 35,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false
-        };
-
-        settingsPanel.Controls.Add(new Label { Text = "Échant. (ms):", AutoSize = true, Margin = new Padding(0, 8, 3, 0) });
-        _numSamplingInterval = new NumericUpDown { Minimum = 10, Maximum = 60000, Value = 100, Width = 60 };
-        settingsPanel.Controls.Add(_numSamplingInterval);
-
-        settingsPanel.Controls.Add(new Label { Text = "Publ. (ms):", AutoSize = true, Margin = new Padding(10, 8, 3, 0) });
-        _numPublishingInterval = new NumericUpDown { Minimum = 100, Maximum = 60000, Value = 500, Width = 60 };
-        settingsPanel.Controls.Add(_numPublishingInterval);
-
-        _btnAddSubscription = new Button { Text = "Ajouter", Width = 80, Height = 28, Margin = new Padding(15, 3, 3, 0) };
-        _btnAddSubscription.Click += async (s, e) => await AddSelectedSubscriptionsAsync();
-        settingsPanel.Controls.Add(_btnAddSubscription);
-
-        _btnRemoveSubscription = new Button { Text = "Supprimer", Width = 80, Height = 28, Margin = new Padding(5, 3, 0, 0) };
-        _btnRemoveSubscription.Click += async (s, e) => await RemoveSelectedSubscriptionsAsync();
-        settingsPanel.Controls.Add(_btnRemoveSubscription);
-
-        bottomPanel.Controls.Add(settingsPanel);
-
-        _gridSubscriptions = new DataGridView
-        {
-            Dock = DockStyle.Fill,
-            AutoGenerateColumns = false,
-            SelectionMode = DataGridViewSelectionMode.FullRowSelect,
-            AllowUserToAddRows = false,
-            ReadOnly = true
-        };
-
-        _gridSubscriptions.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "NodeId", HeaderText = "ID nœud", Width = 150 });
-        _gridSubscriptions.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "BrowsePath", HeaderText = "Chemin", Width = 250 });
-        _gridSubscriptions.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "SamplingIntervalMs", HeaderText = "Échant.", Width = 60 });
-        _gridSubscriptions.Columns.Add(new DataGridViewCheckBoxColumn { DataPropertyName = "Enabled", HeaderText = "Actif", Width = 50 });
-
-        bottomPanel.Controls.Add(_gridSubscriptions);
-
-        // Important: Add grid first so it fills remaining space
-        bottomPanel.Controls.SetChildIndex(_gridSubscriptions, 0);
-        bottomPanel.Controls.SetChildIndex(settingsPanel, 1);
-
-        splitContainer.Panel2.Controls.Add(bottomPanel);
-
-        tab.Controls.Add(splitContainer);
+        tab.Controls.Add(mainPanel);
         return tab;
     }
 
     private TabPage CreateStatusTab()
     {
-        var tab = new TabPage("État et diagnostics");
+        var tab = new TabPage("Etat et diagnostics");
         var panel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 3,
-            RowCount = 16,
+            RowCount = 18,
             Padding = new Padding(10)
         };
 
@@ -363,18 +302,22 @@ public partial class ConfigForm : Form
         var row = 0;
 
         // Status section
-        var lblStatus = new Label { Text = "État", Font = new Font(Font, FontStyle.Bold), AutoSize = true };
+        var lblStatus = new Label { Text = "Etat", Font = new Font(Font, FontStyle.Bold), AutoSize = true };
         panel.Controls.Add(lblStatus, 0, row++);
 
         panel.Controls.Add(new Label { Text = "Connexion OPC UA :" }, 0, row);
-        _lblOpcUaConnectionState = new Label { Text = "Déconnecté", ForeColor = Color.Gray };
+        _lblOpcUaConnectionState = new Label { Text = "Deconnecte", ForeColor = Color.Gray };
         panel.Controls.Add(_lblOpcUaConnectionState, 1, row++);
+
+        panel.Controls.Add(new Label { Text = "Serveurs connectes :" }, 0, row);
+        _lblConnectedServers = new Label { Text = "0 / 0", ForeColor = Color.Gray };
+        panel.Controls.Add(_lblConnectedServers, 1, row++);
 
         panel.Controls.Add(new Label { Text = "Mode de persistance :" }, 0, row);
         _lblPersistenceMode = new Label { Text = "Inconnu", ForeColor = Color.Gray };
         panel.Controls.Add(_lblPersistenceMode, 1, row++);
 
-        panel.Controls.Add(new Label { Text = "État MongoDB :" }, 0, row);
+        panel.Controls.Add(new Label { Text = "Etat MongoDB :" }, 0, row);
         _lblMongoHealth = new Label { Text = "Inconnu", ForeColor = Color.Gray };
         panel.Controls.Add(_lblMongoHealth, 1, row++);
 
@@ -397,7 +340,7 @@ public partial class ConfigForm : Form
         _lblTotalAcquired = new Label { Text = "0" };
         panel.Controls.Add(_lblTotalAcquired, 1, row++);
 
-        panel.Controls.Add(new Label { Text = "Total persisté :" }, 0, row);
+        panel.Controls.Add(new Label { Text = "Total persiste :" }, 0, row);
         _lblTotalPersisted = new Label { Text = "0" };
         panel.Controls.Add(_lblTotalPersisted, 1, row++);
 
@@ -446,27 +389,6 @@ public partial class ConfigForm : Form
         return tab;
     }
 
-    private void OnBrowseJsonPath(object? sender, EventArgs e)
-    {
-        using var dialog = new FolderBrowserDialog
-        {
-            Description = "Sélectionner le dossier pour le fallback JSON",
-            UseDescriptionForTitle = true,
-            ShowNewFolderButton = true
-        };
-
-        // Set initial path if exists
-        if (!string.IsNullOrEmpty(_txtJsonFallbackPath.Text) && Directory.Exists(_txtJsonFallbackPath.Text))
-        {
-            dialog.InitialDirectory = _txtJsonFallbackPath.Text;
-        }
-
-        if (dialog.ShowDialog() == DialogResult.OK)
-        {
-            _txtJsonFallbackPath.Text = dialog.SelectedPath;
-        }
-    }
-
     private TabPage CreateLogsTab()
     {
         var tab = new TabPage("Journaux");
@@ -508,7 +430,6 @@ public partial class ConfigForm : Form
     {
         var config = _configService.Current;
 
-        _txtOpcUaEndpoint.Text = config.OpcUaEndpointUrl;
         _txtMongoConnectionString.Text = config.MongoConnectionString;
         _txtMongoDatabase.Text = config.MongoDatabaseName;
         _txtMongoCollection.Text = config.MongoCollectionName;
@@ -516,13 +437,164 @@ public partial class ConfigForm : Form
         _chkForceJsonOnly.Checked = config.ForceJsonOnly;
         _chkDryRunMode.Checked = config.DryRunMode;
 
-        // JSON fallback path - show actual path used (custom or default)
         _txtJsonFallbackPath.Text = !string.IsNullOrWhiteSpace(config.JsonFallbackPath)
             ? config.JsonFallbackPath
             : _configService.DataFolderPath;
 
-        // Load subscriptions grid
-        RefreshSubscriptionsGrid();
+        // Load server list
+        RefreshServerList();
+    }
+
+    private void RefreshServerList()
+    {
+        _listServers.Items.Clear();
+
+        foreach (var server in _configService.Current.Servers)
+        {
+            var state = _clientManager.GetServerState(server.Id);
+            var item = new ListViewItem(server.Name)
+            {
+                Tag = server.Id
+            };
+            item.SubItems.Add(server.EndpointUrl);
+            item.SubItems.Add(state.ToString());
+            item.SubItems.Add(server.Subscriptions.Count.ToString());
+
+            // Color based on state
+            item.ForeColor = state switch
+            {
+                OpcUaConnectionState.Connected => Color.Green,
+                OpcUaConnectionState.Connecting or OpcUaConnectionState.Reconnecting => Color.Orange,
+                OpcUaConnectionState.Error => Color.Red,
+                _ => Color.Gray
+            };
+
+            _listServers.Items.Add(item);
+        }
+    }
+
+    private void CreateServerTabs()
+    {
+        // Remove old server tabs
+        foreach (var tabPage in _serverTabs.Values)
+        {
+            _tabControl.TabPages.Remove(tabPage);
+        }
+        _serverTabs.Clear();
+        _serverTabPages.Clear();
+
+        // Create new tabs for each server
+        var insertIndex = 1; // After "Serveurs" tab
+        foreach (var server in _configService.Current.Servers)
+        {
+            var serverTabPage = new ServerTabPage(_clientManager, _configService, server.Id)
+            {
+                Dock = DockStyle.Fill,
+                LogMessage = AppendLog
+            };
+
+            var tabPage = new TabPage(server.Name);
+            tabPage.Controls.Add(serverTabPage);
+
+            _tabControl.TabPages.Insert(insertIndex++, tabPage);
+            _serverTabs[server.Id] = tabPage;
+            _serverTabPages[server.Id] = serverTabPage;
+        }
+    }
+
+    private async Task AddServerAsync()
+    {
+        using var dialog = new ServerEditDialog(null);
+        if (dialog.ShowDialog() == DialogResult.OK)
+        {
+            var newServer = dialog.ServerConfig;
+            await _configService.AddServerAsync(newServer);
+
+            RefreshServerList();
+            CreateServerTabs();
+
+            AppendLog($"Serveur ajoute: {newServer.Name}", Color.Green);
+        }
+    }
+
+    private void EditSelectedServer()
+    {
+        if (_listServers.SelectedItems.Count == 0) return;
+
+        var serverId = _listServers.SelectedItems[0].Tag as string;
+        if (string.IsNullOrEmpty(serverId)) return;
+
+        var server = _configService.GetServer(serverId);
+        if (server == null) return;
+
+        using var dialog = new ServerEditDialog(server);
+        if (dialog.ShowDialog() == DialogResult.OK)
+        {
+            _ = _configService.UpdateServerAsync(serverId, s =>
+            {
+                s.Name = dialog.ServerConfig.Name;
+                s.EndpointUrl = dialog.ServerConfig.EndpointUrl;
+                s.Enabled = dialog.ServerConfig.Enabled;
+            });
+
+            RefreshServerList();
+
+            // Update tab name
+            if (_serverTabs.TryGetValue(serverId, out var tabPage))
+            {
+                tabPage.Text = dialog.ServerConfig.Name;
+            }
+
+            AppendLog($"Serveur modifie: {dialog.ServerConfig.Name}", Color.Green);
+        }
+    }
+
+    private async Task RemoveSelectedServerAsync()
+    {
+        if (_listServers.SelectedItems.Count == 0) return;
+
+        var serverId = _listServers.SelectedItems[0].Tag as string;
+        if (string.IsNullOrEmpty(serverId)) return;
+
+        var server = _configService.GetServer(serverId);
+        if (server == null) return;
+
+        var result = MessageBox.Show(
+            $"Supprimer le serveur '{server.Name}' et tous ses abonnements ?",
+            "Confirmation",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+
+        if (result == DialogResult.Yes)
+        {
+            await _clientManager.RemoveServerAsync(serverId);
+            await _configService.RemoveServerAsync(serverId);
+
+            RefreshServerList();
+            CreateServerTabs();
+
+            AppendLog($"Serveur supprime: {server.Name}", Color.Orange);
+        }
+    }
+
+    private void OnBrowseJsonPath(object? sender, EventArgs e)
+    {
+        using var dialog = new FolderBrowserDialog
+        {
+            Description = "Selectionner le dossier pour le fallback JSON",
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = true
+        };
+
+        if (!string.IsNullOrEmpty(_txtJsonFallbackPath.Text) && Directory.Exists(_txtJsonFallbackPath.Text))
+        {
+            dialog.InitialDirectory = _txtJsonFallbackPath.Text;
+        }
+
+        if (dialog.ShowDialog() == DialogResult.OK)
+        {
+            _txtJsonFallbackPath.Text = dialog.SelectedPath;
+        }
     }
 
     private async Task SaveConfigurationAsync()
@@ -533,7 +605,6 @@ public partial class ConfigForm : Form
             var jsonPath = _txtJsonFallbackPath.Text.Trim();
             if (!string.IsNullOrEmpty(jsonPath) && jsonPath != _configService.DataFolderPath)
             {
-                // Try to create directory if it doesn't exist
                 if (!Directory.Exists(jsonPath))
                 {
                     try
@@ -542,7 +613,7 @@ public partial class ConfigForm : Form
                     }
                     catch (Exception ex)
                     {
-                        MessageBox.Show($"Impossible de créer le dossier JSON :\n{ex.Message}", "Erreur",
+                        MessageBox.Show($"Impossible de creer le dossier JSON :\n{ex.Message}", "Erreur",
                             MessageBoxButtons.OK, MessageBoxIcon.Error);
                         return;
                     }
@@ -551,77 +622,25 @@ public partial class ConfigForm : Form
 
             await _configService.UpdateAsync(config =>
             {
-                config.OpcUaEndpointUrl = _txtOpcUaEndpoint.Text;
                 config.MongoConnectionString = _txtMongoConnectionString.Text;
                 config.MongoDatabaseName = _txtMongoDatabase.Text;
                 config.MongoCollectionName = _txtMongoCollection.Text;
                 config.ForceJsonOnly = _chkForceJsonOnly.Checked;
                 config.DryRunMode = _chkDryRunMode.Checked;
 
-                // Save custom path only if different from default
                 var defaultPath = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                     "OpcUaTrayClient", "Data");
                 config.JsonFallbackPath = jsonPath != defaultPath ? jsonPath : "";
             });
 
-            AppendLog("Configuration enregistrée", Color.Green);
-            MessageBox.Show("Configuration enregistrée avec succès.", "Succès", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            AppendLog("Configuration enregistree", Color.Green);
+            MessageBox.Show("Configuration enregistree avec succes.", "Succes", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
-            AppendLog($"Échec de l'enregistrement : {ex.Message}", Color.Red);
-            MessageBox.Show($"Échec de l'enregistrement de la configuration :\n{ex.Message}", "Erreur", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
-    }
-
-    private async Task TestOpcUaConnectionAsync()
-    {
-        _btnTestOpcUa.Enabled = false;
-        _lblOpcUaStatus.Text = "Test en cours...";
-        _lblOpcUaStatus.ForeColor = Color.Gray;
-
-        try
-        {
-            // Create temporary client for testing
-            var testClient = new OpcUaClientService(
-                _services.GetRequiredService<Core.Channel.DataPointChannel>(),
-                _services.GetRequiredService<ILogger<OpcUaClientService>>());
-
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            await testClient.ConnectAsync(_txtOpcUaEndpoint.Text, cts.Token);
-
-            // Try to browse root
-            var nodes = await testClient.BrowseAsync(null, cts.Token);
-
-            await testClient.DisconnectAsync();
-            testClient.Dispose();
-
-            _lblOpcUaStatus.Text = $"Connecté ! {nodes.Count} nœuds racines trouvés.";
-            _lblOpcUaStatus.ForeColor = Color.Green;
-            AppendLog($"Test de connexion OPC UA réussi : {nodes.Count} nœuds racines", Color.Green);
-
-            // Proposer de démarrer l'acquisition
-            var result = MessageBox.Show(
-                "Connexion au serveur OPC UA réussie !\n\nVoulez-vous démarrer l'acquisition maintenant ?",
-                "Connexion réussie",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Question);
-
-            if (result == DialogResult.Yes)
-            {
-                StartAcquisitionRequested?.Invoke(this, EventArgs.Empty);
-            }
-        }
-        catch (Exception ex)
-        {
-            _lblOpcUaStatus.Text = $"Échec : {ex.Message}";
-            _lblOpcUaStatus.ForeColor = Color.Red;
-            AppendLog($"Échec du test de connexion OPC UA : {ex.Message}", Color.Red);
-        }
-        finally
-        {
-            _btnTestOpcUa.Enabled = true;
+            AppendLog($"Echec de l'enregistrement : {ex.Message}", Color.Red);
+            MessageBox.Show($"Echec de l'enregistrement de la configuration :\n{ex.Message}", "Erreur", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 
@@ -640,22 +659,21 @@ public partial class ConfigForm : Form
             var client = new MongoClient(settings);
             var database = client.GetDatabase(_txtMongoDatabase.Text);
 
-            // Insert and delete test document
             var collection = database.GetCollection<MongoDB.Bson.BsonDocument>(_txtMongoCollection.Text);
             var testDoc = new MongoDB.Bson.BsonDocument { { "test", DateTime.UtcNow } };
 
             await collection.InsertOneAsync(testDoc);
             await collection.DeleteOneAsync(MongoDB.Driver.Builders<MongoDB.Bson.BsonDocument>.Filter.Eq("_id", testDoc["_id"]));
 
-            _lblMongoStatus.Text = "Connexion réussie !";
+            _lblMongoStatus.Text = "Connexion reussie !";
             _lblMongoStatus.ForeColor = Color.Green;
-            AppendLog("Test de connexion MongoDB réussi", Color.Green);
+            AppendLog("Test de connexion MongoDB reussi", Color.Green);
         }
         catch (Exception ex)
         {
-            _lblMongoStatus.Text = $"Échec : {ex.Message}";
+            _lblMongoStatus.Text = $"Echec : {ex.Message}";
             _lblMongoStatus.ForeColor = Color.Red;
-            AppendLog($"Échec du test de connexion MongoDB : {ex.Message}", Color.Red);
+            AppendLog($"Echec du test de connexion MongoDB : {ex.Message}", Color.Red);
         }
         finally
         {
@@ -663,316 +681,40 @@ public partial class ConfigForm : Form
         }
     }
 
-    private async Task RefreshNodesAsync()
+    private void OnServerConnectionStateChanged(object? sender, ServerConnectionStateChangedEventArgs e)
     {
-        _btnRefreshNodes.Enabled = false;
-        _treeNodes.Nodes.Clear();
-
-        try
+        if (InvokeRequired)
         {
-            if (_opcUaClient.ConnectionState != OpcUaConnectionState.Connected)
-            {
-                AppendLog("Non connecté au serveur OPC UA", Color.Orange);
-                return;
-            }
-
-            // Niveau 1 : enfants de ObjectsFolder
-            var nodes = await _opcUaClient.BrowseAsync(null);
-
-            AppendLog($"Browse niveau 1: {nodes.Count} nodes trouvés", Color.Cyan);
-            foreach (var n in nodes)
-            {
-                AppendLog($"  - {n.DisplayName} (ns={n.NamespaceIndex}, {n.NodeId})", Color.Cyan);
-            }
-
-            foreach (var node in nodes)
-            {
-                var treeNode = CreateTreeNode(node);
-                _treeNodes.Nodes.Add(treeNode);
-
-                // Charger automatiquement le niveau 2 (pour voir DataBlocksInstance, etc.)
-                if (node.HasChildren)
-                {
-                    treeNode.Nodes.Clear(); // Supprimer le dummy "Chargement..."
-                    try
-                    {
-                        var children = await _opcUaClient.BrowseAsync(node.NodeId);
-                        foreach (var child in children)
-                        {
-                            var childTreeNode = CreateTreeNode(child, node.BrowsePath);
-                            treeNode.Nodes.Add(childTreeNode);
-                        }
-                    }
-                    catch
-                    {
-                        // Remettre le dummy en cas d'erreur
-                        treeNode.Nodes.Add(new TreeNode("Chargement..."));
-                    }
-                }
-            }
-
-            // Étendre automatiquement les nodes de niveau 1
-            foreach (TreeNode treeNode in _treeNodes.Nodes)
-            {
-                if (treeNode.Nodes.Count > 0)
-                {
-                    treeNode.Expand();
-                }
-            }
-
-            AppendLog($"{nodes.Count} nœuds racines chargés (avec enfants)", Color.LightGray);
-        }
-        catch (Exception ex)
-        {
-            AppendLog($"Échec du parcours des nœuds : {ex.Message}", Color.Red);
-        }
-        finally
-        {
-            _btnRefreshNodes.Enabled = true;
-        }
-    }
-
-    private TreeNode CreateTreeNode(OpcUaNode node, string parentPath = "")
-    {
-        // Build the full browse path
-        node.BrowsePath = string.IsNullOrEmpty(parentPath)
-            ? node.DisplayName
-            : $"{parentPath}/{node.DisplayName}";
-
-        var treeNode = new TreeNode(node.DisplayName)
-        {
-            Tag = node,
-            ToolTipText = $"{node.BrowsePath}\n({node.NodeId})"
-        };
-
-        // Add dummy child for lazy loading
-        if (node.HasChildren)
-        {
-            treeNode.Nodes.Add(new TreeNode("Chargement..."));
+            BeginInvoke(() => OnServerConnectionStateChanged(sender, e));
+            return;
         }
 
-        // Style based on node type
-        if (node.IsVariable)
+        // Update server list
+        RefreshServerList();
+
+        // Update server tab status
+        if (_serverTabPages.TryGetValue(e.ServerId, out var serverTabPage))
         {
-            treeNode.ForeColor = Color.Blue;
+            serverTabPage.UpdateServerStatus();
         }
 
-        return treeNode;
-    }
-
-    private async Task OnNodeExpandingAsync(TreeViewCancelEventArgs e)
-    {
-        if (e.Node == null) return;
-
-        // Check if already loaded
-        if (e.Node.Nodes.Count == 1 && e.Node.Nodes[0].Text == "Chargement...")
-        {
-            e.Node.Nodes.Clear();
-
-            try
-            {
-                var parentNode = e.Node.Tag as OpcUaNode;
-                if (parentNode == null)
-                {
-                    AppendLog($"Erreur: Tag null pour {e.Node.Text}", Color.Red);
-                    return;
-                }
-
-                AppendLog($"Browse de '{parentNode.DisplayName}' ({parentNode.NodeId})...", Color.Gray);
-                var children = await _opcUaClient.BrowseAsync(parentNode.NodeId);
-                AppendLog($"  -> {children.Count} enfants trouvés", Color.Gray);
-
-                if (children.Count == 0)
-                {
-                    e.Node.Nodes.Add(new TreeNode("(vide)") { ForeColor = Color.Gray });
-                }
-                else
-                {
-                    foreach (var child in children)
-                    {
-                        // Pass parent's browse path for hierarchical context
-                        var treeNode = CreateTreeNode(child, parentNode.BrowsePath);
-                        // Hériter l'état coché du parent lors du chargement
-                        treeNode.Checked = e.Node.Checked;
-                        e.Node.Nodes.Add(treeNode);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                AppendLog($"Erreur browse: {ex.Message}", Color.Red);
-                e.Node.Nodes.Add(new TreeNode($"Erreur : {ex.Message}") { ForeColor = Color.Red });
-            }
-        }
-    }
-
-    private void OnNodeAfterCheck(object? sender, TreeViewEventArgs e)
-    {
-        // Avoid recursive calls
-        if (e.Action == TreeViewAction.Unknown) return;
-        if (e.Node == null) return;
-
-        // Check/uncheck all children
-        SetChildNodesChecked(e.Node, e.Node.Checked);
-    }
-
-    private void SetChildNodesChecked(TreeNode node, bool isChecked)
-    {
-        foreach (TreeNode child in node.Nodes)
-        {
-            child.Checked = isChecked;
-            SetChildNodesChecked(child, isChecked);
-        }
-    }
-
-    private async Task AddSelectedSubscriptionsAsync()
-    {
-        _btnAddSubscription.Enabled = false;
-        _btnAddSubscription.Text = "Chargement...";
-
-        try
-        {
-            // D'abord, charger tous les enfants des nœuds cochés récursivement
-            await LoadCheckedNodesChildrenAsync(_treeNodes.Nodes);
-
-            // Maintenant, récupérer tous les nœuds cochés (y compris les enfants chargés)
-            var selectedNodes = GetCheckedNodes(_treeNodes.Nodes).ToList();
-            var subscribableNodes = selectedNodes.Where(n => n.IsSubscribable).ToList();
-
-            if (subscribableNodes.Count == 0)
-            {
-                AppendLog("Aucun nœud abonnable sélectionné", Color.Orange);
-                return;
-            }
-
-            foreach (var node in subscribableNodes)
-            {
-                var subscription = new SubscriptionDefinition
-                {
-                    NodeId = node.NodeId,
-                    DisplayName = node.DisplayName,
-                    BrowsePath = node.BrowsePath,
-                    SamplingIntervalMs = (int)_numSamplingInterval.Value,
-                    PublishingIntervalMs = (int)_numPublishingInterval.Value,
-                    Enabled = true
-                };
-
-                await _configService.AddSubscriptionAsync(subscription);
-            }
-
-            AppendLog($"{subscribableNodes.Count} abonnement(s) ajouté(s)", Color.Green);
-            RefreshSubscriptionsGrid();
-        }
-        catch (Exception ex)
-        {
-            AppendLog($"Erreur lors de l'ajout des abonnements : {ex.Message}", Color.Red);
-        }
-        finally
-        {
-            _btnAddSubscription.Enabled = true;
-            _btnAddSubscription.Text = "Ajouter";
-        }
-    }
-
-    /// <summary>
-    /// Charge récursivement tous les enfants des nœuds cochés.
-    /// </summary>
-    private async Task LoadCheckedNodesChildrenAsync(TreeNodeCollection nodes)
-    {
-        foreach (TreeNode treeNode in nodes)
-        {
-            if (treeNode.Checked)
-            {
-                // Si ce nœud a des enfants non chargés (dummy "Chargement...")
-                if (treeNode.Nodes.Count == 1 && treeNode.Nodes[0].Text == "Chargement...")
-                {
-                    await LoadNodeChildrenAsync(treeNode);
-                }
-
-                // Charger récursivement les enfants de ce nœud
-                await LoadCheckedNodesChildrenAsync(treeNode.Nodes);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Charge les enfants d'un nœud spécifique.
-    /// </summary>
-    private async Task LoadNodeChildrenAsync(TreeNode treeNode)
-    {
-        if (treeNode.Tag is not OpcUaNode parentNode) return;
-
-        treeNode.Nodes.Clear();
-
-        try
-        {
-            var children = await _opcUaClient.BrowseAsync(parentNode.NodeId);
-
-            foreach (var child in children)
-            {
-                // Pass parent's browse path for hierarchical context
-                var childTreeNode = CreateTreeNode(child, parentNode.BrowsePath);
-                // Hériter l'état coché du parent
-                childTreeNode.Checked = treeNode.Checked;
-                treeNode.Nodes.Add(childTreeNode);
-            }
-        }
-        catch (Exception ex)
-        {
-            treeNode.Nodes.Add(new TreeNode($"Erreur : {ex.Message}") { ForeColor = Color.Red });
-        }
-    }
-
-    private IEnumerable<OpcUaNode> GetCheckedNodes(TreeNodeCollection nodes)
-    {
-        foreach (TreeNode treeNode in nodes)
-        {
-            if (treeNode.Checked && treeNode.Tag is OpcUaNode node)
-            {
-                yield return node;
-            }
-
-            foreach (var child in GetCheckedNodes(treeNode.Nodes))
-            {
-                yield return child;
-            }
-        }
-    }
-
-    private async Task RemoveSelectedSubscriptionsAsync()
-    {
-        var selectedRows = _gridSubscriptions.SelectedRows;
-        foreach (DataGridViewRow row in selectedRows)
-        {
-            if (row.DataBoundItem is SubscriptionDefinition sub)
-            {
-                await _configService.RemoveSubscriptionAsync(sub.NodeId);
-            }
-        }
-
-        RefreshSubscriptionsGrid();
-    }
-
-    private void RefreshSubscriptionsGrid()
-    {
-        _gridSubscriptions.DataSource = null;
-        _gridSubscriptions.DataSource = _configService.Current.Subscriptions;
+        AppendLog($"Serveur {e.ServerName}: {e.OldState} -> {e.NewState}",
+            e.NewState == OpcUaConnectionState.Connected ? Color.Green : Color.Orange);
     }
 
     private async Task OnForceJsonOnlyChangedAsync()
     {
         await _configService.UpdateAsync(c => c.ForceJsonOnly = _chkForceJsonOnly.Checked);
 
-        // Appliquer le changement immédiatement au service de persistance
         if (_chkForceJsonOnly.Checked)
         {
             _persistenceService.ForceMode(PersistenceMode.JsonFallback);
-            AppendLog("Mode forcé : JSON uniquement", Color.Orange);
+            AppendLog("Mode force : JSON uniquement", Color.Orange);
         }
         else if (!_chkDryRunMode.Checked)
         {
             _persistenceService.ForceMode(PersistenceMode.MongoDB);
-            AppendLog("Mode forcé : MongoDB", Color.Green);
+            AppendLog("Mode force : MongoDB", Color.Green);
         }
     }
 
@@ -980,21 +722,20 @@ public partial class ConfigForm : Form
     {
         await _configService.UpdateAsync(c => c.DryRunMode = _chkDryRunMode.Checked);
 
-        // Appliquer le changement immédiatement au service de persistance
         if (_chkDryRunMode.Checked)
         {
             _persistenceService.ForceMode(PersistenceMode.DryRun);
-            AppendLog("Mode forcé : Test (sans persistance)", Color.Gray);
+            AppendLog("Mode force : Test (sans persistance)", Color.Gray);
         }
         else if (_chkForceJsonOnly.Checked)
         {
             _persistenceService.ForceMode(PersistenceMode.JsonFallback);
-            AppendLog("Mode forcé : JSON uniquement", Color.Orange);
+            AppendLog("Mode force : JSON uniquement", Color.Orange);
         }
         else
         {
             _persistenceService.ForceMode(PersistenceMode.MongoDB);
-            AppendLog("Mode forcé : MongoDB", Color.Green);
+            AppendLog("Mode force : MongoDB", Color.Green);
         }
     }
 
@@ -1009,7 +750,7 @@ public partial class ConfigForm : Form
         if (dialog.ShowDialog() == DialogResult.OK)
         {
             File.WriteAllText(dialog.FileName, _txtLogs.Text);
-            AppendLog($"Journaux exportés vers {dialog.FileName}", Color.Green);
+            AppendLog($"Journaux exportes vers {dialog.FileName}", Color.Green);
         }
     }
 
@@ -1032,6 +773,11 @@ public partial class ConfigForm : Form
             OpcUaConnectionState.Connecting or OpcUaConnectionState.Reconnecting => Color.Orange,
             _ => Color.Red
         };
+
+        _lblConnectedServers.Text = $"{update.ConnectedServerCount} / {update.TotalServerCount}";
+        _lblConnectedServers.ForeColor = update.ConnectedServerCount == update.TotalServerCount && update.TotalServerCount > 0
+            ? Color.Green
+            : (update.ConnectedServerCount > 0 ? Color.Orange : Color.Red);
 
         _lblPersistenceMode.Text = update.PersistenceMode.ToString();
         _lblPersistenceMode.ForeColor = update.PersistenceMode switch
@@ -1059,7 +805,6 @@ public partial class ConfigForm : Form
         _lblDropped.ForeColor = update.DroppedCount > 0 ? Color.Red : Color.Green;
     }
 
-    // Maximum number of lines in the log display (prevents memory leak)
     private const int MaxLogLines = 1000;
 
     private void AppendLog(string message, Color color)
@@ -1070,14 +815,13 @@ public partial class ConfigForm : Form
             return;
         }
 
-        // Trim old lines if we exceed the limit
         if (_txtLogs.Lines.Length > MaxLogLines)
         {
-            var linesToRemove = _txtLogs.Lines.Length - MaxLogLines + 100; // Remove 100 extra to avoid frequent trimming
+            var linesToRemove = _txtLogs.Lines.Length - MaxLogLines + 100;
             var firstLineLength = 0;
             for (int i = 0; i < linesToRemove && i < _txtLogs.Lines.Length; i++)
             {
-                firstLineLength += _txtLogs.Lines[i].Length + 1; // +1 for newline
+                firstLineLength += _txtLogs.Lines[i].Length + 1;
             }
 
             _txtLogs.Select(0, firstLineLength);
@@ -1090,5 +834,209 @@ public partial class ConfigForm : Form
         _txtLogs.SelectionColor = color;
         _txtLogs.AppendText($"[{timestamp}] {message}\n");
         _txtLogs.ScrollToCaret();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _clientManager.ServerConnectionStateChanged -= OnServerConnectionStateChanged;
+        }
+        base.Dispose(disposing);
+    }
+}
+
+/// <summary>
+/// V2.0.0: Dialog for adding/editing server configuration with connection test.
+/// </summary>
+public class ServerEditDialog : Form
+{
+    private TextBox _txtName = null!;
+    private TextBox _txtEndpoint = null!;
+    private CheckBox _chkEnabled = null!;
+    private Button _btnTest = null!;
+    private Label _lblTestStatus = null!;
+
+    public OpcUaServerConfiguration ServerConfig { get; private set; }
+
+    public ServerEditDialog(OpcUaServerConfiguration? existingServer)
+    {
+        ServerConfig = existingServer ?? new OpcUaServerConfiguration();
+        InitializeComponent();
+        LoadValues();
+    }
+
+    private void InitializeComponent()
+    {
+        Text = string.IsNullOrEmpty(ServerConfig.Id) ? "Ajouter un serveur" : "Modifier le serveur";
+        Size = new Size(550, 250);
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.CenterParent;
+        MaximizeBox = false;
+        MinimizeBox = false;
+
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 3,
+            RowCount = 6,
+            Padding = new Padding(10)
+        };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
+
+        var row = 0;
+
+        layout.Controls.Add(new Label { Text = "Nom :", Anchor = AnchorStyles.Left }, 0, row);
+        _txtName = new TextBox { Dock = DockStyle.Fill };
+        layout.Controls.Add(_txtName, 1, row);
+        layout.SetColumnSpan(_txtName, 2);
+        row++;
+
+        layout.Controls.Add(new Label { Text = "URL :", Anchor = AnchorStyles.Left }, 0, row);
+        _txtEndpoint = new TextBox { Dock = DockStyle.Fill };
+        layout.Controls.Add(_txtEndpoint, 1, row);
+        _btnTest = new Button { Text = "Tester", Dock = DockStyle.Fill };
+        _btnTest.Click += async (s, e) => await TestConnectionAsync();
+        layout.Controls.Add(_btnTest, 2, row);
+        row++;
+
+        _lblTestStatus = new Label { Text = "", Dock = DockStyle.Fill, ForeColor = Color.Gray };
+        layout.Controls.Add(_lblTestStatus, 1, row);
+        layout.SetColumnSpan(_lblTestStatus, 2);
+        row++;
+
+        _chkEnabled = new CheckBox { Text = "Active", Checked = true };
+        layout.Controls.Add(_chkEnabled, 1, row);
+        row++;
+
+        // Spacer
+        layout.Controls.Add(new Label(), 0, row++);
+
+        var buttonPanel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft
+        };
+
+        var btnCancel = new Button { Text = "Annuler", Width = 80, DialogResult = DialogResult.Cancel };
+        buttonPanel.Controls.Add(btnCancel);
+
+        var btnOk = new Button { Text = "OK", Width = 80 };
+        btnOk.Click += OnOkClick;
+        buttonPanel.Controls.Add(btnOk);
+
+        layout.Controls.Add(buttonPanel, 0, row);
+        layout.SetColumnSpan(buttonPanel, 3);
+
+        Controls.Add(layout);
+
+        AcceptButton = btnOk;
+        CancelButton = btnCancel;
+    }
+
+    private void LoadValues()
+    {
+        _txtName.Text = ServerConfig.Name;
+        _txtEndpoint.Text = ServerConfig.EndpointUrl;
+        _chkEnabled.Checked = ServerConfig.Enabled;
+    }
+
+    private async Task TestConnectionAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_txtEndpoint.Text))
+        {
+            MessageBox.Show("L'URL est requise pour tester la connexion.", "Erreur", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        _btnTest.Enabled = false;
+        _lblTestStatus.Text = "Test en cours...";
+        _lblTestStatus.ForeColor = Color.Gray;
+
+        try
+        {
+            // Create a temporary client to test the connection
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+            // Use OPC UA SDK directly for testing
+            var endpointUrl = _txtEndpoint.Text.Trim();
+            var config = new Opc.Ua.ApplicationConfiguration
+            {
+                ApplicationName = "OpcUaTrayClient_Test",
+                ApplicationType = Opc.Ua.ApplicationType.Client,
+                SecurityConfiguration = new Opc.Ua.SecurityConfiguration
+                {
+                    ApplicationCertificate = new Opc.Ua.CertificateIdentifier(),
+                    AutoAcceptUntrustedCertificates = true
+                },
+                ClientConfiguration = new Opc.Ua.ClientConfiguration { DefaultSessionTimeout = 10000 }
+            };
+            await config.Validate(Opc.Ua.ApplicationType.Client);
+
+            var endpoint = Opc.Ua.CoreClientUtils.SelectEndpoint(endpointUrl, useSecurity: false, 5000);
+            var endpointConfig = Opc.Ua.EndpointConfiguration.Create(config);
+            var configuredEndpoint = new Opc.Ua.ConfiguredEndpoint(null, endpoint, endpointConfig);
+
+            using var session = await Opc.Ua.Client.Session.Create(
+                config,
+                configuredEndpoint,
+                false,
+                "TestSession",
+                10000,
+                new Opc.Ua.UserIdentity(new Opc.Ua.AnonymousIdentityToken()),
+                null);
+
+            // Try to browse root to verify connection works
+            var browseResult = session.Browse(
+                null,
+                null,
+                Opc.Ua.ObjectIds.ObjectsFolder,
+                0u,
+                Opc.Ua.BrowseDirection.Forward,
+                Opc.Ua.ReferenceTypeIds.HierarchicalReferences,
+                true,
+                0,
+                out _,
+                out var references);
+
+            await session.CloseAsync();
+
+            var nodeCount = references?.Count ?? 0;
+            _lblTestStatus.Text = $"Connexion reussie ! {nodeCount} noeuds trouves.";
+            _lblTestStatus.ForeColor = Color.Green;
+        }
+        catch (Exception ex)
+        {
+            _lblTestStatus.Text = $"Echec : {ex.Message}";
+            _lblTestStatus.ForeColor = Color.Red;
+        }
+        finally
+        {
+            _btnTest.Enabled = true;
+        }
+    }
+
+    private void OnOkClick(object? sender, EventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_txtName.Text))
+        {
+            MessageBox.Show("Le nom est requis.", "Erreur", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_txtEndpoint.Text))
+        {
+            MessageBox.Show("L'URL est requise.", "Erreur", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        ServerConfig.Name = _txtName.Text.Trim();
+        ServerConfig.EndpointUrl = _txtEndpoint.Text.Trim();
+        ServerConfig.Enabled = _chkEnabled.Checked;
+
+        DialogResult = DialogResult.OK;
+        Close();
     }
 }
