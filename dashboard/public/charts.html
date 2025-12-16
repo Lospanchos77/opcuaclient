@@ -123,6 +123,10 @@
             <div class="row">
               <div class="col-md-6">
                 <div class="btn-group">
+                  <button type="button" class="btn btn-outline-secondary btn-sm" onclick="setPreset('30s')">30 sec</button>
+                  <button type="button" class="btn btn-outline-secondary btn-sm" onclick="setPreset('1m')">1 min</button>
+                  <button type="button" class="btn btn-outline-secondary btn-sm" onclick="setPreset('5m')">5 min</button>
+                  <button type="button" class="btn btn-outline-secondary btn-sm" onclick="setPreset('10m')">10 min</button>
                   <button type="button" class="btn btn-outline-secondary btn-sm" onclick="setPreset('1h')">1 heure</button>
                   <button type="button" class="btn btn-outline-secondary btn-sm" onclick="setPreset('6h')">6 heures</button>
                   <button type="button" class="btn btn-outline-secondary btn-sm" onclick="setPreset('24h')">24 heures</button>
@@ -159,6 +163,20 @@
           <div class="card-header">
             <h3 class="card-title"><i class="fas fa-chart-area mr-2"></i>Historique</h3>
             <div class="card-tools">
+              <div class="btn-group btn-group-sm mr-3" role="group">
+                <button type="button" class="btn btn-outline-secondary active" data-chart-type="line" onclick="setChartType('line')" title="Ligne">
+                  <i class="fas fa-chart-line"></i>
+                </button>
+                <button type="button" class="btn btn-outline-secondary" data-chart-type="area" onclick="setChartType('area')" title="Aire">
+                  <i class="fas fa-chart-area"></i>
+                </button>
+                <button type="button" class="btn btn-outline-secondary" data-chart-type="bar" onclick="setChartType('bar')" title="Barres">
+                  <i class="fas fa-chart-bar"></i>
+                </button>
+                <button type="button" class="btn btn-outline-secondary" data-chart-type="scatter" onclick="setChartType('scatter')" title="Points">
+                  <i class="fas fa-braille"></i>
+                </button>
+              </div>
               <span id="pointCount" class="badge badge-info">0 points</span>
             </div>
           </div>

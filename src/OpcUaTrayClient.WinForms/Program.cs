@@ -8,6 +8,7 @@ using OpcUaTrayClient.OpcUa;
 using OpcUaTrayClient.Persistence;
 using OpcUaTrayClient.Persistence.JsonFallback;
 using OpcUaTrayClient.Persistence.MongoDB;
+using Serilog;
 
 namespace OpcUaTrayClient.WinForms;
 
@@ -42,11 +43,30 @@ internal static class Program
     {
         var services = new ServiceCollection();
 
-        // Logging - build a temporary provider to get logger for ConfigurationService
+        // Configure Serilog for file logging
+        var logPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "OpcUaTrayClient", "Logs", "opcuaclient-.log");
+
+        // Ensure log directory exists
+        Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+
+        Log.Logger = new LoggerConfiguration()
+            .MinimumLevel.Debug()
+            .WriteTo.File(
+                logPath,
+                rollingInterval: RollingInterval.Day,
+                retainedFileCountLimit: 7,  // Keep 7 days of logs
+                fileSizeLimitBytes: 10 * 1024 * 1024, // 10 MB max per file
+                rollOnFileSizeLimit: true,
+                outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}")
+            .CreateLogger();
+
+        // Logging - use Serilog
         services.AddLogging(builder =>
         {
             builder.SetMinimumLevel(LogLevel.Debug);
-            builder.AddConsole();
+            builder.AddSerilog(Log.Logger, dispose: true);
         });
 
         // Create and load ConfigurationService BEFORE registering it

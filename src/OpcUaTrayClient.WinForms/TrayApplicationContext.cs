@@ -49,6 +49,10 @@ public sealed class TrayApplicationContext : ApplicationContext
     private long _lastDataPointCount;
     private DateTime _lastStatusUpdate = DateTime.UtcNow;
 
+    // Cached icons to prevent memory leak (icons are reused instead of recreated)
+    private readonly Dictionary<Color, Icon> _iconCache = new();
+    private Icon? _currentIcon;
+
     public TrayApplicationContext(IServiceProvider services)
     {
         _services = services;
@@ -290,17 +294,31 @@ public sealed class TrayApplicationContext : ApplicationContext
             _ => Color.Gray
         };
 
-        // Create a simple colored icon
-        _notifyIcon.Icon = CreateColoredIcon(color);
+        // Use cached icon to prevent memory leak
+        var newIcon = GetOrCreateIcon(color);
+        if (newIcon != _currentIcon)
+        {
+            _currentIcon = newIcon;
+            _notifyIcon.Icon = newIcon;
+        }
     }
 
-    private static Icon CreateDefaultIcon()
+    private Icon CreateDefaultIcon()
     {
-        return CreateColoredIcon(Color.Gray);
+        return GetOrCreateIcon(Color.Gray);
     }
 
-    private static Icon CreateColoredIcon(Color color)
+    /// <summary>
+    /// Gets an icon from cache or creates and caches it.
+    /// Icons are cached to prevent memory leak from repeated icon creation.
+    /// </summary>
+    private Icon GetOrCreateIcon(Color color)
     {
+        if (_iconCache.TryGetValue(color, out var cachedIcon))
+        {
+            return cachedIcon;
+        }
+
         // Create a simple 16x16 icon with the specified color
         using var bitmap = new Bitmap(16, 16);
         using var graphics = Graphics.FromImage(bitmap);
@@ -311,8 +329,21 @@ public sealed class TrayApplicationContext : ApplicationContext
         using var pen = new Pen(Color.Black, 1);
         graphics.DrawEllipse(pen, 2, 2, 12, 12);
 
-        return Icon.FromHandle(bitmap.GetHicon());
+        var hIcon = bitmap.GetHicon();
+        var icon = Icon.FromHandle(hIcon);
+
+        // Clone the icon so we can safely store it (Icon.FromHandle doesn't own the handle)
+        var clonedIcon = (Icon)icon.Clone();
+
+        // Destroy the original handle to prevent leak
+        DestroyIcon(hIcon);
+
+        _iconCache[color] = clonedIcon;
+        return clonedIcon;
     }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+    private static extern bool DestroyIcon(IntPtr handle);
 
     private void OnConnectionStateChanged(object? sender, OpcUaConnectionState state)
     {
@@ -372,6 +403,13 @@ public sealed class TrayApplicationContext : ApplicationContext
             _contextMenu?.Dispose();
             _configForm?.Dispose();
             _acquisitionCts?.Dispose();
+
+            // Dispose cached icons
+            foreach (var icon in _iconCache.Values)
+            {
+                icon?.Dispose();
+            }
+            _iconCache.Clear();
         }
 
         base.Dispose(disposing);

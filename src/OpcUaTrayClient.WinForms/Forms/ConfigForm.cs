@@ -1059,12 +1059,29 @@ public partial class ConfigForm : Form
         _lblDropped.ForeColor = update.DroppedCount > 0 ? Color.Red : Color.Green;
     }
 
+    // Maximum number of lines in the log display (prevents memory leak)
+    private const int MaxLogLines = 1000;
+
     private void AppendLog(string message, Color color)
     {
         if (_txtLogs.InvokeRequired)
         {
             _txtLogs.BeginInvoke(() => AppendLog(message, color));
             return;
+        }
+
+        // Trim old lines if we exceed the limit
+        if (_txtLogs.Lines.Length > MaxLogLines)
+        {
+            var linesToRemove = _txtLogs.Lines.Length - MaxLogLines + 100; // Remove 100 extra to avoid frequent trimming
+            var firstLineLength = 0;
+            for (int i = 0; i < linesToRemove && i < _txtLogs.Lines.Length; i++)
+            {
+                firstLineLength += _txtLogs.Lines[i].Length + 1; // +1 for newline
+            }
+
+            _txtLogs.Select(0, firstLineLength);
+            _txtLogs.SelectedText = "";
         }
 
         var timestamp = DateTime.Now.ToString("HH:mm:ss.fff");

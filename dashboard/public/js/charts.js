@@ -4,6 +4,7 @@ let chart = null;
 let dateRangePicker = null;
 let autoRefreshInterval = null;
 let isAutoRefreshing = false;
+let currentChartType = 'line';  // line, area, bar, scatter
 
 // Colors for multiple series
 const chartColors = [
@@ -62,6 +63,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      animation: false,  // Disable all animations for smoother real-time updates
       interaction: {
         mode: 'index',
         intersect: false
@@ -171,6 +173,16 @@ async function loadChart() {
   const start = picker.startDate.toISOString();
   const end = picker.endDate.toISOString();
 
+  // Add 1 minute padding to the right for visual effect
+  const endWithPadding = moment(picker.endDate).add(1, 'minutes').toDate();
+
+  // Update chart type
+  const chartType = currentChartType === 'area' ? 'line' : (currentChartType === 'scatter' ? 'scatter' : currentChartType);
+  chart.config.type = chartType;
+
+  // Set x-axis max to include padding
+  chart.options.scales.x.max = endWithPadding;
+
   // Clear previous data
   chart.data.datasets = [];
 
@@ -203,16 +215,26 @@ async function loadChart() {
       const numericValues = points.map(p => p.y).filter(v => !isNaN(v));
       allValues = allValues.concat(numericValues);
 
+      // Determine fill and point settings based on chart type
+      const isFill = currentChartType === 'area';
+      const pointRadius = currentChartType === 'scatter' ? 4 : (points.length > 100 ? 0 : 3);
+      const showLine = currentChartType !== 'scatter';
+      const barPercentage = currentChartType === 'bar' ? 0.8 : undefined;
+
       // Add dataset
       chart.data.datasets.push({
         label: truncateLabel(label, 30),
         data: points,
         borderColor: chartColors[i % chartColors.length],
-        backgroundColor: chartColors[i % chartColors.length].replace('rgb', 'rgba').replace(')', ', 0.1)'),
-        borderWidth: 2,
-        pointRadius: points.length > 100 ? 0 : 3,
+        backgroundColor: currentChartType === 'bar'
+          ? chartColors[i % chartColors.length].replace('rgb', 'rgba').replace(')', ', 0.7)')
+          : chartColors[i % chartColors.length].replace('rgb', 'rgba').replace(')', ', 0.2)'),
+        borderWidth: currentChartType === 'bar' ? 1 : 2,
+        pointRadius: pointRadius,
         tension: 0.1,
-        fill: selectedNodes.length === 1
+        fill: isFill,
+        showLine: showLine,
+        barPercentage: barPercentage
       });
 
       totalPoints += data.length;
@@ -244,6 +266,18 @@ function setPreset(preset) {
   let start, end = moment();
 
   switch (preset) {
+    case '30s':
+      start = moment().subtract(30, 'seconds');
+      break;
+    case '1m':
+      start = moment().subtract(1, 'minutes');
+      break;
+    case '5m':
+      start = moment().subtract(5, 'minutes');
+      break;
+    case '10m':
+      start = moment().subtract(10, 'minutes');
+      break;
     case '1h':
       start = moment().subtract(1, 'hours');
       break;
@@ -330,5 +364,21 @@ function refreshWithSlidingWindow() {
   picker.setEndDate(newEnd);
 
   // Reload chart
+  loadChart();
+}
+
+// Set chart type
+function setChartType(type) {
+  currentChartType = type;
+
+  // Update button states
+  document.querySelectorAll('[data-chart-type]').forEach(btn => {
+    btn.classList.remove('active');
+    if (btn.dataset.chartType === type) {
+      btn.classList.add('active');
+    }
+  });
+
+  // Reload chart with new type
   loadChart();
 }

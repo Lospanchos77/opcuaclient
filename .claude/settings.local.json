@@ -15,7 +15,11 @@
       "Bash(findstr:*)",
       "Bash(dotnet publish:*)",
       "Bash(powershell -Command \"(Get-ChildItem ''d:\\CLientOPCUA\\publish'' -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB\")",
-      "Bash(ls -la \"d:\\CLientOPCUA\\src\\OpcUaTrayClient.OpcUa\"\" | findstr /V \"obj \")"
+      "Bash(ls -la \"d:\\CLientOPCUA\\src\\OpcUaTrayClient.OpcUa\"\" | findstr /V \"obj \")",
+      "Bash(git commit:*)",
+      "Bash(git remote add:*)",
+      "Bash(git branch:*)",
+      "Bash(git push:*)"
     ],
     "deny": [],
     "ask": []
