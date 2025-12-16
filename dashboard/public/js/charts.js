@@ -265,10 +265,13 @@ async function loadChart() {
     const nodeId = selectedNodes[i];
 
     try {
-      // V2.0.0: Include serverId in API call if filtered
+      // V2.0.0: Get serverId from the option's data attribute or from global filter
+      const option = document.querySelector(`#nodeSelect option[value="${nodeId}"]`);
+      const nodeServerId = selectedServerId || (option ? option.dataset.serverId : null);
+
       let url = `/data/history?nodeId=${encodeURIComponent(nodeId)}&start=${start}&end=${end}&limit=5000`;
-      if (selectedServerId) {
-        url += `&serverId=${encodeURIComponent(selectedServerId)}`;
+      if (nodeServerId) {
+        url += `&serverId=${encodeURIComponent(nodeServerId)}`;
       }
       const response = await api(url);
       if (!response) continue;
@@ -277,8 +280,7 @@ async function loadChart() {
 
       if (data.length === 0) continue;
 
-      // Get node name from select option
-      const option = document.querySelector(`#nodeSelect option[value="${nodeId}"]`);
+      // Get node name from the option we already looked up
       const label = option ? option.textContent : nodeId;
 
       // Prepare data points

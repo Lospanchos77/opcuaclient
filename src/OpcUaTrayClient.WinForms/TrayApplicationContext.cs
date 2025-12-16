@@ -138,8 +138,32 @@ public sealed class TrayApplicationContext : ApplicationContext
         // Restart connection
         var restartItem = new ToolStripMenuItem("Redémarrer la connexion OPC UA", null, async (s, e) =>
         {
-            await StopAcquisitionAsync();
+            _logger.LogInformation("Restarting OPC UA connection...");
+
+            // Force stop regardless of current state
+            try
+            {
+                await _opcUaManager.DisconnectAllAsync();
+                _acquisitionCts?.Cancel();
+                if (_persistenceTask != null)
+                {
+                    try { await _persistenceTask; } catch (OperationCanceledException) { }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error during forced disconnect");
+            }
+
+            _acquisitionRunning = false;
+            _startMenuItem.Enabled = true;
+            _stopMenuItem.Enabled = false;
+
+            // Reload configuration and restart
+            await _configService.ReloadAsync();
             await StartAcquisitionAsync();
+
+            _logger.LogInformation("OPC UA connection restart complete");
         });
         menu.Items.Add(restartItem);
 
@@ -158,7 +182,6 @@ public sealed class TrayApplicationContext : ApplicationContext
         {
             _configForm = new ConfigForm(_services);
             _configForm.FormClosed += (s, e) => _configForm = null;
-            _configForm.StartAcquisitionRequested += async (s, e) => await StartAcquisitionAsync();
         }
 
         _configForm.Show();

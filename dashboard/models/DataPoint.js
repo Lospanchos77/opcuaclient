@@ -53,6 +53,7 @@ const DataPointService = {
   },
 
   // Get latest value for each node (V2.0.0: optional server filter)
+  // Groups by serverId + nodeId to treat same nodeId on different servers as distinct
   async getLatest(maxAge = 60000, serverId = null) {
     const since = new Date(Date.now() - maxAge);
     const match = { timestampUtc: { $gte: since } };
@@ -62,28 +63,28 @@ const DataPointService = {
       { $match: match },
       { $sort: { timestampUtc: -1 } },
       {
+        // V2.0.0: Group by serverId + nodeId to keep nodes from different servers separate
         $group: {
-          _id: '$nodeId',
+          _id: { serverId: '$serverId', nodeId: '$nodeId' },
           lastValue: { $first: '$value' },
           lastTimestamp: { $first: '$timestampUtc' },
           displayName: { $first: '$displayName' },
           browsePath: { $first: '$browsePath' },
           quality: { $first: '$quality' },
-          serverId: { $first: '$serverId' },        // V2.0.0
-          serverName: { $first: '$serverName' }     // V2.0.0
+          serverName: { $first: '$serverName' }
         }
       },
       {
         $project: {
           _id: 0,
-          nodeId: '$_id',
+          nodeId: '$_id.nodeId',
+          serverId: '$_id.serverId',
           displayName: 1,
           browsePath: 1,
           lastValue: 1,
           lastTimestamp: 1,
           quality: 1,
-          serverId: 1,                              // V2.0.0
-          serverName: { $ifNull: ['$serverName', 'Serveur inconnu'] }  // V2.0.0
+          serverName: { $ifNull: ['$serverName', 'Serveur inconnu'] }
         }
       },
       { $sort: { serverName: 1, browsePath: 1 } }
@@ -109,28 +110,29 @@ const DataPointService = {
   },
 
   // Get list of distinct nodes (V2.0.0: optional server filter)
+  // Groups by serverId + nodeId to treat same nodeId on different servers as distinct
   async getNodes(serverId = null) {
     const match = serverId ? { serverId } : {};
 
     return DataPoint.aggregate([
       { $match: match },  // V2.0.0: filter by server
       {
+        // V2.0.0: Group by serverId + nodeId to keep nodes from different servers separate
         $group: {
-          _id: '$nodeId',
+          _id: { serverId: '$serverId', nodeId: '$nodeId' },
           displayName: { $first: '$displayName' },
           browsePath: { $first: '$browsePath' },
-          serverId: { $first: '$serverId' },        // V2.0.0
-          serverName: { $first: '$serverName' }     // V2.0.0
+          serverName: { $first: '$serverName' }
         }
       },
       {
         $project: {
           _id: 0,
-          nodeId: '$_id',
+          nodeId: '$_id.nodeId',
+          serverId: '$_id.serverId',
           displayName: 1,
           browsePath: 1,
-          serverId: 1,                              // V2.0.0
-          serverName: { $ifNull: ['$serverName', 'Serveur inconnu'] }  // V2.0.0
+          serverName: { $ifNull: ['$serverName', 'Serveur inconnu'] }
         }
       },
       { $sort: { serverName: 1, browsePath: 1 } }
@@ -138,6 +140,7 @@ const DataPointService = {
   },
 
   // Get statistics (V2.0.0: optional server filter)
+  // Groups by serverId + nodeId to treat same nodeId on different servers as distinct
   async getStats(start, end, serverId = null) {
     const match = {};
     if (serverId) match.serverId = serverId;  // V2.0.0
@@ -154,12 +157,12 @@ const DataPointService = {
     return DataPoint.aggregate([
       { $match: match },
       {
+        // V2.0.0: Group by serverId + nodeId to keep nodes from different servers separate
         $group: {
-          _id: '$nodeId',
+          _id: { serverId: '$serverId', nodeId: '$nodeId' },
           displayName: { $first: '$displayName' },
           browsePath: { $first: '$browsePath' },
-          serverId: { $first: '$serverId' },        // V2.0.0
-          serverName: { $first: '$serverName' },    // V2.0.0
+          serverName: { $first: '$serverName' },
           pointCount: { $sum: 1 },
           avgValue: { $avg: '$value' },
           minValue: { $min: '$value' },
@@ -171,11 +174,11 @@ const DataPointService = {
       {
         $project: {
           _id: 0,
-          nodeId: '$_id',
+          nodeId: '$_id.nodeId',
+          serverId: '$_id.serverId',
           displayName: 1,
           browsePath: 1,
-          serverId: 1,                              // V2.0.0
-          serverName: { $ifNull: ['$serverName', 'Serveur inconnu'] },  // V2.0.0
+          serverName: { $ifNull: ['$serverName', 'Serveur inconnu'] },
           pointCount: 1,
           avgValue: { $round: ['$avgValue', 2] },
           minValue: 1,

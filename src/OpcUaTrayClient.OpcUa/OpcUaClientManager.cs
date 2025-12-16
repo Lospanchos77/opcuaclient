@@ -177,28 +177,38 @@ public sealed class OpcUaClientManager : IDisposable
 
         lock (_lock)
         {
-            if (_clients.ContainsKey(config.Id))
+            if (_clients.TryGetValue(config.Id, out var existingClient))
             {
-                _logger.LogWarning("Server {ServerId} already exists, skipping", config.Id);
-                return;
+                // Server exists - check if we need to reconnect
+                if (existingClient.ConnectionState == OpcUaConnectionState.Connected)
+                {
+                    _logger.LogDebug("Server {ServerId} already connected, skipping", config.Id);
+                    return;
+                }
+
+                _logger.LogInformation("Server {ServerId} exists but disconnected, will reconnect", config.Id);
+                client = existingClient;
             }
+            else
+            {
+                // Create new client
+                var sessionTimeout = config.SessionTimeoutMs ?? _defaultSessionTimeoutMs;
+                var keepAliveInterval = config.KeepAliveIntervalMs ?? _defaultKeepAliveIntervalMs;
 
-            var sessionTimeout = config.SessionTimeoutMs ?? _defaultSessionTimeoutMs;
-            var keepAliveInterval = config.KeepAliveIntervalMs ?? _defaultKeepAliveIntervalMs;
+                client = new OpcUaClientService(
+                    config.Id,
+                    config.Name,
+                    _channel,
+                    _loggerFactory.CreateLogger<OpcUaClientService>(),
+                    sessionTimeout,
+                    keepAliveInterval);
 
-            client = new OpcUaClientService(
-                config.Id,
-                config.Name,
-                _channel,
-                _loggerFactory.CreateLogger<OpcUaClientService>(),
-                sessionTimeout,
-                keepAliveInterval);
+                client.ConnectionStateChanged += OnClientConnectionStateChanged;
+                client.DataPointReceived += OnClientDataPointReceived;
 
-            client.ConnectionStateChanged += OnClientConnectionStateChanged;
-            client.DataPointReceived += OnClientDataPointReceived;
-
-            _clients[config.Id] = client;
-            _previousStates[config.Id] = OpcUaConnectionState.Disconnected;
+                _clients[config.Id] = client;
+                _previousStates[config.Id] = OpcUaConnectionState.Disconnected;
+            }
         }
 
         try

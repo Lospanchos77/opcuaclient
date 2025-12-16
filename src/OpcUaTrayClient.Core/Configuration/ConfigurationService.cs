@@ -172,6 +172,16 @@ public sealed class ConfigurationService : IDisposable
     }
 
     /// <summary>
+    /// Reloads the configuration from disk.
+    /// </summary>
+    public async Task ReloadAsync(CancellationToken ct = default)
+    {
+        _logger.LogInformation("Reloading configuration from disk...");
+        await LoadAsync(ct);
+        ConfigurationChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
     /// Saves the current configuration to disk.
     /// </summary>
     public async Task SaveAsync(CancellationToken ct = default)

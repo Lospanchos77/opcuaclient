@@ -147,9 +147,9 @@ async function loadLatestValues() {
       </div>
     `).join('');
 
-    // Initialize mini charts
+    // Initialize mini charts (V2.0.0: pass serverId)
     data.forEach((item, index) => {
-      initMiniChart(index, item.nodeId);
+      initMiniChart(index, item.nodeId, item.serverId);
     });
   } else {
     // Just update values without recreating cards
@@ -218,8 +218,8 @@ function getNodeName(path) {
   return name.toUpperCase();
 }
 
-// Initialize a mini chart
-function initMiniChart(index, nodeId) {
+// Initialize a mini chart (V2.0.0: include serverId)
+function initMiniChart(index, nodeId, serverId) {
   const canvas = document.getElementById(`minichart-${index}`);
   if (!canvas) return;
 
@@ -227,6 +227,7 @@ function initMiniChart(index, nodeId) {
 
   miniCharts[index] = {
     nodeId: nodeId,
+    serverId: serverId,  // V2.0.0: Track server for history queries
     chart: new Chart(ctx, {
       type: 'line',
       data: {
@@ -292,7 +293,7 @@ function initMiniChart(index, nodeId) {
   };
 }
 
-// Update mini charts with recent data
+// Update mini charts with recent data (V2.0.0: include serverId in history query)
 async function updateMiniCharts(latestData) {
   const now = new Date();
   const start = new Date(now.getTime() - 60000);  // Last 1 minute
@@ -301,10 +302,16 @@ async function updateMiniCharts(latestData) {
     const item = latestData[index];
     const chartInfo = miniCharts[index];
 
-    if (!chartInfo || chartInfo.nodeId !== item.nodeId) continue;
+    // V2.0.0: Check both nodeId and serverId match
+    if (!chartInfo || chartInfo.nodeId !== item.nodeId || chartInfo.serverId !== item.serverId) continue;
 
     try {
-      const response = await api(`/data/history?nodeId=${encodeURIComponent(item.nodeId)}&start=${start.toISOString()}&end=${now.toISOString()}&limit=100`);
+      // V2.0.0: Include serverId in history query to get correct server's data
+      let historyUrl = `/data/history?nodeId=${encodeURIComponent(item.nodeId)}&start=${start.toISOString()}&end=${now.toISOString()}&limit=100`;
+      if (item.serverId) {
+        historyUrl += `&serverId=${encodeURIComponent(item.serverId)}`;
+      }
+      const response = await api(historyUrl);
       if (!response) continue;
 
       const history = await response.json();

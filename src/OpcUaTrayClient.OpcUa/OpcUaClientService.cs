@@ -125,10 +125,10 @@ public sealed class OpcUaClientService : IDisposable
             SetConnectionState(OpcUaConnectionState.Connecting);
             _lastError = null;
 
-            // Create application configuration
+            // Create application configuration with unique name per server
             _appConfig = new ApplicationConfiguration
             {
-                ApplicationName = "OpcUaTrayClient",
+                ApplicationName = $"OpcUaTrayClient_{_serverId}",
                 ApplicationType = ApplicationType.Client,
                 SecurityConfiguration = new SecurityConfiguration
                 {
@@ -153,17 +153,18 @@ public sealed class OpcUaClientService : IDisposable
 
             await _appConfig.Validate(ApplicationType.Client);
 
-            // Select endpoint (no security for now)
-            var endpoint = CoreClientUtils.SelectEndpoint(endpointUrl, useSecurity: false);
+            // Select endpoint with timeout (no security for now)
+            _logger.LogDebug("[{ServerName}] Discovering endpoint: {Endpoint}", _serverName, endpointUrl);
+            var endpoint = CoreClientUtils.SelectEndpoint(endpointUrl, useSecurity: false, 15000);
             var endpointConfig = EndpointConfiguration.Create(_appConfig);
             var configuredEndpoint = new ConfiguredEndpoint(null, endpoint, endpointConfig);
 
-            // Create session
+            // Create session with unique name per server
             _session = await Session.Create(
                 _appConfig,
                 configuredEndpoint,
                 updateBeforeConnect: false,
-                sessionName: "OpcUaTrayClient_Session",
+                sessionName: $"OpcUaTrayClient_Session_{_serverId}",
                 sessionTimeout: (uint)_sessionTimeout.TotalMilliseconds,
                 identity: null, // Anonymous
                 preferredLocales: null,

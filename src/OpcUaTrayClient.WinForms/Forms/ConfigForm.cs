@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MongoDB.Driver;
+using Opc.Ua;
+using Opc.Ua.Client;
 using OpcUaTrayClient.Core.Configuration;
 using OpcUaTrayClient.Core.Models;
 using OpcUaTrayClient.OpcUa;
@@ -22,11 +24,6 @@ public partial class ConfigForm : Form
     private readonly OpcUaClientManager _clientManager;
     private readonly MongoHealthMonitor _healthMonitor;
     private readonly DataPersistenceService _persistenceService;
-
-    /// <summary>
-    /// Event raised when user requests acquisition start.
-    /// </summary>
-    public event EventHandler? StartAcquisitionRequested;
 
     // Controls
     private TabControl _tabControl = null!;
@@ -206,12 +203,13 @@ public partial class ConfigForm : Form
             View = View.Details,
             FullRowSelect = true,
             GridLines = true,
-            MultiSelect = false
+            MultiSelect = false,
+            ShowItemToolTips = true
         };
-        _listServers.Columns.Add("Nom", 150);
-        _listServers.Columns.Add("URL", 300);
-        _listServers.Columns.Add("Etat", 80);
-        _listServers.Columns.Add("Abonnements", 80);
+        _listServers.Columns.Add("Nom", 120);
+        _listServers.Columns.Add("URL", 280);
+        _listServers.Columns.Add("Etat", 150);
+        _listServers.Columns.Add("Abonn.", 60);
         _listServers.DoubleClick += (s, e) => EditSelectedServer();
         serverLayout.Controls.Add(_listServers, 0, 0);
 
@@ -452,13 +450,31 @@ public partial class ConfigForm : Form
         foreach (var server in _configService.Current.Servers)
         {
             var state = _clientManager.GetServerState(server.Id);
+            var client = _clientManager.GetClient(server.Id);
+            var lastError = client?.LastError;
+
             var item = new ListViewItem(server.Name)
             {
                 Tag = server.Id
             };
             item.SubItems.Add(server.EndpointUrl);
-            item.SubItems.Add(state.ToString());
+
+            // Show state with error hint
+            var stateText = state.ToString();
+            if (state == OpcUaConnectionState.Error && !string.IsNullOrEmpty(lastError))
+            {
+                // Truncate error for display
+                var shortError = lastError.Length > 30 ? lastError[..30] + "..." : lastError;
+                stateText = $"Erreur: {shortError}";
+            }
+            item.SubItems.Add(stateText);
             item.SubItems.Add(server.Subscriptions.Count.ToString());
+
+            // Tooltip with full error
+            if (!string.IsNullOrEmpty(lastError))
+            {
+                item.ToolTipText = $"Erreur: {lastError}";
+            }
 
             // Color based on state
             item.ForeColor = state switch
@@ -957,30 +973,32 @@ public class ServerEditDialog : Form
 
         try
         {
-            // Create a temporary client to test the connection
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-
             // Use OPC UA SDK directly for testing
             var endpointUrl = _txtEndpoint.Text.Trim();
-            var config = new Opc.Ua.ApplicationConfiguration
+
+            // Use fully qualified names to avoid conflict with System.Configuration
+            var appConfig = new Opc.Ua.ApplicationConfiguration
             {
                 ApplicationName = "OpcUaTrayClient_Test",
                 ApplicationType = Opc.Ua.ApplicationType.Client,
                 SecurityConfiguration = new Opc.Ua.SecurityConfiguration
                 {
                     ApplicationCertificate = new Opc.Ua.CertificateIdentifier(),
-                    AutoAcceptUntrustedCertificates = true
+                    AutoAcceptUntrustedCertificates = true,
+                    RejectSHA1SignedCertificates = false,
+                    MinimumCertificateKeySize = 1024
                 },
-                ClientConfiguration = new Opc.Ua.ClientConfiguration { DefaultSessionTimeout = 10000 }
+                ClientConfiguration = new Opc.Ua.ClientConfiguration { DefaultSessionTimeout = 10000 },
+                TransportQuotas = new Opc.Ua.TransportQuotas { OperationTimeout = 10000 }
             };
-            await config.Validate(Opc.Ua.ApplicationType.Client);
+            await appConfig.Validate(Opc.Ua.ApplicationType.Client);
 
-            var endpoint = Opc.Ua.CoreClientUtils.SelectEndpoint(endpointUrl, useSecurity: false, 5000);
-            var endpointConfig = Opc.Ua.EndpointConfiguration.Create(config);
+            var endpoint = CoreClientUtils.SelectEndpoint(endpointUrl, useSecurity: false, 5000);
+            var endpointConfig = Opc.Ua.EndpointConfiguration.Create(appConfig);
             var configuredEndpoint = new Opc.Ua.ConfiguredEndpoint(null, endpoint, endpointConfig);
 
-            using var session = await Opc.Ua.Client.Session.Create(
-                config,
+            using var session = await Session.Create(
+                appConfig,
                 configuredEndpoint,
                 false,
                 "TestSession",
@@ -989,13 +1007,13 @@ public class ServerEditDialog : Form
                 null);
 
             // Try to browse root to verify connection works
-            var browseResult = session.Browse(
+            session.Browse(
                 null,
                 null,
-                Opc.Ua.ObjectIds.ObjectsFolder,
+                ObjectIds.ObjectsFolder,
                 0u,
-                Opc.Ua.BrowseDirection.Forward,
-                Opc.Ua.ReferenceTypeIds.HierarchicalReferences,
+                BrowseDirection.Forward,
+                ReferenceTypeIds.HierarchicalReferences,
                 true,
                 0,
                 out _,
