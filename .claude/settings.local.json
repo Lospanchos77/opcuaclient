@@ -21,7 +21,10 @@
       "Bash(git branch:*)",
       "Bash(git push:*)",
       "Bash(git tag:*)",
-      "Bash(powershell:*)"
+      "Bash(powershell:*)",
+      "Bash(cat:*)",
+      "Bash(git log:*)",
+      "Bash(ls:*)"
     ],
     "deny": [],
     "ask": []
