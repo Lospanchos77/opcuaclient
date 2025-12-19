@@ -29,7 +29,9 @@
       "Bash(dotnet add package:*)",
       "Bash(dotnet add reference:*)",
       "Bash(dotnet remove:*)",
-      "Bash(dotnet sln:*)"
+      "Bash(dotnet sln:*)",
+      "Bash(git add:*)",
+      "Bash(git push)"
     ],
     "deny": [],
     "ask": []
