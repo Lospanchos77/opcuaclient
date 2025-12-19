@@ -191,6 +191,20 @@ public sealed class AppConfiguration
     // ─────────────────────────────────────────────────────────────────────────
 
     /// <summary>
+    /// Whether to use Windows Service mode.
+    /// When true: UI controls the Windows Service (start/stop/status) instead of doing its own acquisition.
+    /// When false: UI does its own acquisition (standalone mode for development/testing).
+    /// </summary>
+    [JsonPropertyName("useWindowsService")]
+    public bool UseWindowsService { get; set; } = false;
+
+    /// <summary>
+    /// Name of the Windows Service to control when UseWindowsService is true.
+    /// </summary>
+    [JsonPropertyName("windowsServiceName")]
+    public string WindowsServiceName { get; set; } = "OpcUaTrayClient";
+
+    /// <summary>
     /// Whether to start minimized to system tray.
     /// </summary>
     [JsonPropertyName("startMinimized")]

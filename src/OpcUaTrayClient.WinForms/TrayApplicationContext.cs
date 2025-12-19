@@ -8,6 +8,7 @@ using OpcUaTrayClient.OpcUa;
 using OpcUaTrayClient.Persistence;
 using OpcUaTrayClient.Persistence.MongoDB;
 using OpcUaTrayClient.WinForms.Forms;
+using OpcUaTrayClient.WinForms.Services;
 
 namespace OpcUaTrayClient.WinForms;
 
@@ -17,7 +18,7 @@ namespace OpcUaTrayClient.WinForms;
 /// Manages:
 /// - NotifyIcon with context menu
 /// - Status updates via IProgress&lt;StatusUpdate&gt;
-/// - Service lifecycle
+/// - Service lifecycle (standalone or Windows Service mode)
 /// - ConfigForm instance
 /// </summary>
 public sealed class TrayApplicationContext : ApplicationContext
@@ -30,6 +31,10 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly DataPointChannel _channel;
     private readonly MongoHealthMonitor _healthMonitor;
 
+    // Windows Service mode support
+    private readonly bool _useWindowsService;
+    private readonly WindowsServiceHelper? _serviceHelper;
+
     private readonly NotifyIcon _notifyIcon;
     private readonly ContextMenuStrip _contextMenu;
     private readonly System.Windows.Forms.Timer _statusTimer;
@@ -40,6 +45,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private ToolStripMenuItem _storageMenuItem = null!;
     private ToolStripMenuItem _startMenuItem = null!;
     private ToolStripMenuItem _stopMenuItem = null!;
+    private ToolStripMenuItem? _serviceStatusMenuItem;
 
     private ConfigForm? _configForm;
     private bool _acquisitionRunning;
@@ -63,6 +69,21 @@ public sealed class TrayApplicationContext : ApplicationContext
         _channel = services.GetRequiredService<DataPointChannel>();
         _healthMonitor = services.GetRequiredService<MongoHealthMonitor>();
 
+        // Check if we should use Windows Service mode
+        _useWindowsService = _configService.Current.UseWindowsService;
+        if (_useWindowsService)
+        {
+            var serviceName = _configService.Current.WindowsServiceName;
+            _serviceHelper = new WindowsServiceHelper(
+                services.GetRequiredService<ILogger<WindowsServiceHelper>>(),
+                serviceName);
+            _logger.LogInformation("Running in Windows Service mode, controlling service: {ServiceName}", serviceName);
+        }
+        else
+        {
+            _logger.LogInformation("Running in standalone mode (local acquisition)");
+        }
+
         // Create context menu
         _contextMenu = CreateContextMenu();
 
@@ -85,10 +106,14 @@ public sealed class TrayApplicationContext : ApplicationContext
         _statusTimer.Tick += OnStatusTimerTick;
         _statusTimer.Start();
 
-        // Subscribe to events (V2.0.0: use manager events)
-        _opcUaManager.ServerConnectionStateChanged += OnServerConnectionStateChanged;
-        _persistenceService.ModeChanged += OnPersistenceModeChanged;
-        _healthMonitor.HealthChanged += OnHealthChanged;
+        // Subscribe to events based on mode
+        if (!_useWindowsService)
+        {
+            // Standalone mode: subscribe to local service events
+            _opcUaManager.ServerConnectionStateChanged += OnServerConnectionStateChanged;
+            _persistenceService.ModeChanged += OnPersistenceModeChanged;
+            _healthMonitor.HealthChanged += OnHealthChanged;
+        }
 
         // Show config form on first launch (no servers configured yet)
         var hasSubscriptions = _configService.Current.Servers.Any(s => s.Subscriptions.Count > 0);
@@ -98,13 +123,20 @@ public sealed class TrayApplicationContext : ApplicationContext
             ShowConfigForm();
         }
         // Auto-start acquisition if there are saved servers with subscriptions
-        else
+        else if (!_useWindowsService)
         {
+            // Standalone mode: auto-start local acquisition
             _logger.LogInformation("Servers found ({Count}), auto-starting acquisition", _configService.Current.Servers.Count);
             _ = StartAcquisitionAsync();
         }
+        else
+        {
+            // Windows Service mode: check service status
+            _logger.LogInformation("Windows Service mode - service status: {Status}", _serviceHelper?.StatusText ?? "Unknown");
+        }
 
-        _logger.LogInformation("TrayApplicationContext initialized");
+        _logger.LogInformation("TrayApplicationContext initialized (Mode: {Mode})",
+            _useWindowsService ? "Windows Service" : "Standalone");
     }
 
     private ContextMenuStrip CreateContextMenu()
@@ -119,6 +151,14 @@ public sealed class TrayApplicationContext : ApplicationContext
         menu.Items.Add(_statusMenuItem);
         menu.Items.Add(_queueMenuItem);
         menu.Items.Add(_storageMenuItem);
+
+        // Windows Service mode: show service status
+        if (_useWindowsService)
+        {
+            _serviceStatusMenuItem = new ToolStripMenuItem("Service : Vérification...") { Enabled = false };
+            menu.Items.Add(_serviceStatusMenuItem);
+        }
+
         menu.Items.Add(new ToolStripSeparator());
 
         // Open configuration
@@ -127,47 +167,92 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         menu.Items.Add(new ToolStripSeparator());
 
-        // Start/Stop acquisition
-        _startMenuItem = new ToolStripMenuItem("Démarrer l'acquisition", null, async (s, e) => await StartAcquisitionAsync());
-        _stopMenuItem = new ToolStripMenuItem("Arrêter l'acquisition", null, async (s, e) => await StopAcquisitionAsync());
-        _stopMenuItem.Enabled = false;
-
-        menu.Items.Add(_startMenuItem);
-        menu.Items.Add(_stopMenuItem);
-
-        // Restart connection
-        var restartItem = new ToolStripMenuItem("Redémarrer la connexion OPC UA", null, async (s, e) =>
+        if (_useWindowsService)
         {
-            _logger.LogInformation("Restarting OPC UA connection...");
+            // Windows Service mode: control the service
+            _startMenuItem = new ToolStripMenuItem("Démarrer le service", null, async (s, e) => await StartServiceAsync());
+            _stopMenuItem = new ToolStripMenuItem("Arrêter le service", null, async (s, e) => await StopServiceAsync());
 
-            // Force stop regardless of current state
-            try
+            menu.Items.Add(_startMenuItem);
+            menu.Items.Add(_stopMenuItem);
+
+            // Restart service
+            var restartItem = new ToolStripMenuItem("Redémarrer le service", null, async (s, e) =>
             {
-                await _opcUaManager.DisconnectAllAsync();
-                _acquisitionCts?.Cancel();
-                if (_persistenceTask != null)
+                _logger.LogInformation("Restarting Windows Service...");
+                _startMenuItem.Enabled = false;
+                _stopMenuItem.Enabled = false;
+
+                var success = await _serviceHelper!.RestartAsync();
+
+                if (success)
                 {
-                    try { await _persistenceTask; } catch (OperationCanceledException) { }
+                    _notifyIcon.ShowBalloonTip(3000, "Client OPC UA", "Service redémarré avec succès", ToolTipIcon.Info);
                 }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Error during forced disconnect");
-            }
+                else
+                {
+                    MessageBox.Show("Échec du redémarrage du service.\nVérifiez les droits administrateur.",
+                        "Erreur", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
 
-            _acquisitionRunning = false;
-            _startMenuItem.Enabled = true;
+                UpdateServiceMenuState();
+            });
+            menu.Items.Add(restartItem);
+
+            menu.Items.Add(new ToolStripSeparator());
+
+            // View service logs
+            var logsItem = new ToolStripMenuItem("Voir les logs du service...", null, (s, e) => ShowServiceLogs());
+            menu.Items.Add(logsItem);
+        }
+        else
+        {
+            // Standalone mode: local acquisition controls
+            _startMenuItem = new ToolStripMenuItem("Démarrer l'acquisition", null, async (s, e) => await StartAcquisitionAsync());
+            _stopMenuItem = new ToolStripMenuItem("Arrêter l'acquisition", null, async (s, e) => await StopAcquisitionAsync());
             _stopMenuItem.Enabled = false;
 
-            // Reload configuration and restart
-            await _configService.ReloadAsync();
-            await StartAcquisitionAsync();
+            menu.Items.Add(_startMenuItem);
+            menu.Items.Add(_stopMenuItem);
 
-            _logger.LogInformation("OPC UA connection restart complete");
-        });
-        menu.Items.Add(restartItem);
+            // Restart connection
+            var restartItem = new ToolStripMenuItem("Redémarrer la connexion OPC UA", null, async (s, e) =>
+            {
+                _logger.LogInformation("Restarting OPC UA connection...");
+
+                // Force stop regardless of current state
+                try
+                {
+                    await _opcUaManager.DisconnectAllAsync();
+                    _acquisitionCts?.Cancel();
+                    if (_persistenceTask != null)
+                    {
+                        try { await _persistenceTask; } catch (OperationCanceledException) { }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Error during forced disconnect");
+                }
+
+                _acquisitionRunning = false;
+                _startMenuItem.Enabled = true;
+                _stopMenuItem.Enabled = false;
+
+                // Reload configuration and restart
+                await _configService.ReloadAsync();
+                await StartAcquisitionAsync();
+
+                _logger.LogInformation("OPC UA connection restart complete");
+            });
+            menu.Items.Add(restartItem);
+        }
 
         menu.Items.Add(new ToolStripSeparator());
+
+        // Mode indicator
+        var modeItem = new ToolStripMenuItem($"Mode : {(_useWindowsService ? "Service Windows" : "Standalone")}") { Enabled = false };
+        menu.Items.Add(modeItem);
 
         // Exit
         var exitItem = new ToolStripMenuItem("Quitter", null, OnExit);
@@ -175,6 +260,105 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         return menu;
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // WINDOWS SERVICE MODE METHODS
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private async Task StartServiceAsync()
+    {
+        if (_serviceHelper == null) return;
+
+        _startMenuItem.Enabled = false;
+        _logger.LogInformation("Starting Windows Service...");
+
+        var success = await _serviceHelper.StartAsync();
+
+        if (success)
+        {
+            _notifyIcon.ShowBalloonTip(3000, "Client OPC UA", "Service démarré avec succès", ToolTipIcon.Info);
+        }
+        else
+        {
+            MessageBox.Show("Échec du démarrage du service.\nVérifiez que le service est installé et que vous avez les droits administrateur.",
+                "Erreur", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+
+        UpdateServiceMenuState();
+    }
+
+    private async Task StopServiceAsync()
+    {
+        if (_serviceHelper == null) return;
+
+        _stopMenuItem.Enabled = false;
+        _logger.LogInformation("Stopping Windows Service...");
+
+        var success = await _serviceHelper.StopAsync();
+
+        if (success)
+        {
+            _notifyIcon.ShowBalloonTip(3000, "Client OPC UA", "Service arrêté", ToolTipIcon.Info);
+        }
+        else
+        {
+            MessageBox.Show("Échec de l'arrêt du service.\nVérifiez les droits administrateur.",
+                "Erreur", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+
+        UpdateServiceMenuState();
+    }
+
+    private void UpdateServiceMenuState()
+    {
+        if (_serviceHelper == null) return;
+
+        var isRunning = _serviceHelper.IsRunning;
+        var isStopped = _serviceHelper.IsStopped;
+
+        _startMenuItem.Enabled = isStopped || !_serviceHelper.IsInstalled;
+        _stopMenuItem.Enabled = isRunning;
+
+        if (_serviceStatusMenuItem != null)
+        {
+            _serviceStatusMenuItem.Text = $"Service : {_serviceHelper.StatusText}";
+        }
+    }
+
+    private void ShowServiceLogs()
+    {
+        if (_serviceHelper == null) return;
+
+        var logPath = _serviceHelper.GetLogFilePath();
+
+        // Try to open with default text editor
+        try
+        {
+            if (File.Exists(logPath))
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = logPath,
+                    UseShellExecute = true
+                });
+            }
+            else
+            {
+                MessageBox.Show($"Fichier de log non trouvé:\n{logPath}", "Information",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to open service log file");
+            MessageBox.Show($"Impossible d'ouvrir le fichier de log:\n{ex.Message}", "Erreur",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // STANDALONE MODE METHODS
+    // ─────────────────────────────────────────────────────────────────────────
 
     private void ShowConfigForm()
     {
@@ -263,33 +447,62 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void OnStatusTimerTick(object? sender, EventArgs e)
     {
-        // Calculate points per second (V2.0.0: use aggregated stats from manager)
-        var now = DateTime.UtcNow;
-        var elapsed = (now - _lastStatusUpdate).TotalSeconds;
-        var currentCount = _opcUaManager.TotalDataPointsReceived;
-        var pointsPerSecond = elapsed > 0 ? (int)((currentCount - _lastDataPointCount) / elapsed) : 0;
-
-        _lastDataPointCount = currentCount;
-        _lastStatusUpdate = now;
-
-        var update = new StatusUpdate
+        if (_useWindowsService)
         {
-            QueueDepth = _channel.CurrentCount,
-            DroppedCount = _channel.DroppedCount,
-            ActiveSink = _persistenceService.ActiveSinkName,
-            MongoHealth = _healthMonitor.CurrentHealth,
-            PersistenceMode = _persistenceService.CurrentMode,
-            DataPointsPerSecond = pointsPerSecond,
-            TotalDataPointsReceived = currentCount,
-            TotalDataPointsPersisted = _persistenceService.TotalPersisted,
-            ConnectionState = _opcUaManager.GetAggregatedState(),  // V2.0.0: Aggregated state
-            LastError = null,  // V2.0.0: Would need aggregation logic
-            LastDataPointTime = _opcUaManager.LastDataPointTime,
-            ConnectedServerCount = _opcUaManager.ConnectedServerCount,  // V2.0.0
-            TotalServerCount = _opcUaManager.TotalServerCount  // V2.0.0
-        };
+            // Windows Service mode: update service status
+            UpdateServiceMenuState();
 
-        ((IProgress<StatusUpdate>)_statusProgress).Report(update);
+            // Create a minimal status update for UI
+            var serviceRunning = _serviceHelper?.IsRunning ?? false;
+            var update = new StatusUpdate
+            {
+                ConnectionState = serviceRunning ? OpcUaConnectionState.Connected : OpcUaConnectionState.Disconnected,
+                QueueDepth = 0,
+                DroppedCount = 0,
+                ActiveSink = serviceRunning ? "Service Windows" : "Service arrêté",
+                MongoHealth = serviceRunning ? StorageHealth.Healthy : StorageHealth.Unknown,
+                PersistenceMode = PersistenceMode.MongoDB,
+                DataPointsPerSecond = 0,
+                TotalDataPointsReceived = 0,
+                TotalDataPointsPersisted = 0,
+                LastError = null,
+                LastDataPointTime = null,
+                ConnectedServerCount = 0,
+                TotalServerCount = _configService.Current.Servers.Count
+            };
+
+            ((IProgress<StatusUpdate>)_statusProgress).Report(update);
+        }
+        else
+        {
+            // Standalone mode: calculate points per second from local services
+            var now = DateTime.UtcNow;
+            var elapsed = (now - _lastStatusUpdate).TotalSeconds;
+            var currentCount = _opcUaManager.TotalDataPointsReceived;
+            var pointsPerSecond = elapsed > 0 ? (int)((currentCount - _lastDataPointCount) / elapsed) : 0;
+
+            _lastDataPointCount = currentCount;
+            _lastStatusUpdate = now;
+
+            var update = new StatusUpdate
+            {
+                QueueDepth = _channel.CurrentCount,
+                DroppedCount = _channel.DroppedCount,
+                ActiveSink = _persistenceService.ActiveSinkName,
+                MongoHealth = _healthMonitor.CurrentHealth,
+                PersistenceMode = _persistenceService.CurrentMode,
+                DataPointsPerSecond = pointsPerSecond,
+                TotalDataPointsReceived = currentCount,
+                TotalDataPointsPersisted = _persistenceService.TotalPersisted,
+                ConnectionState = _opcUaManager.GetAggregatedState(),  // V2.0.0: Aggregated state
+                LastError = null,  // V2.0.0: Would need aggregation logic
+                LastDataPointTime = _opcUaManager.LastDataPointTime,
+                ConnectedServerCount = _opcUaManager.ConnectedServerCount,  // V2.0.0
+                TotalServerCount = _opcUaManager.TotalServerCount  // V2.0.0
+            };
+
+            ((IProgress<StatusUpdate>)_statusProgress).Report(update);
+        }
     }
 
     private void OnStatusUpdate(StatusUpdate update)
@@ -408,16 +621,19 @@ public sealed class TrayApplicationContext : ApplicationContext
         _statusTimer.Stop();
         _statusTimer.Dispose();
 
-        // Stop acquisition
-        await StopAcquisitionAsync();
+        // Stop acquisition only in standalone mode
+        if (!_useWindowsService)
+        {
+            await StopAcquisitionAsync();
+
+            // Complete channel to drain remaining items
+            _channel.Complete();
+        }
 
         // Cleanup
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
         _contextMenu.Dispose();
-
-        // Complete channel to drain remaining items
-        _channel.Complete();
 
         // Exit application
         Application.Exit();
@@ -432,6 +648,7 @@ public sealed class TrayApplicationContext : ApplicationContext
             _contextMenu?.Dispose();
             _configForm?.Dispose();
             _acquisitionCts?.Dispose();
+            _serviceHelper?.Dispose();
 
             // Dispose cached icons
             foreach (var icon in _iconCache.Values)

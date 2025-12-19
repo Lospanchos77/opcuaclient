@@ -24,7 +24,12 @@
       "Bash(powershell:*)",
       "Bash(cat:*)",
       "Bash(git log:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(dotnet new:*)",
+      "Bash(dotnet add package:*)",
+      "Bash(dotnet add reference:*)",
+      "Bash(dotnet remove:*)",
+      "Bash(dotnet sln:*)"
     ],
     "deny": [],
     "ask": []

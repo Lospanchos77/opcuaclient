@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <AssemblyName>OpcUaTrayClient.Service</AssemblyName>
+    <RootNamespace>OpcUaTrayClient.Service</RootNamespace>
+    <Description>OPC UA Client Windows Service - Collects OPC UA data and stores to MongoDB</Description>
+    <Authors>OpcUaTrayClient</Authors>
+    <Version>2.0.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.5" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="9.0.5" />
+    <PackageReference Include="Serilog.Extensions.Hosting" Version="10.0.0" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpcUaTrayClient.Core\OpcUaTrayClient.Core.csproj" />
+    <ProjectReference Include="..\OpcUaTrayClient.OpcUa\OpcUaTrayClient.OpcUa.csproj" />
+    <ProjectReference Include="..\OpcUaTrayClient.Persistence\OpcUaTrayClient.Persistence.csproj" />
+  </ItemGroup>
+</Project>
